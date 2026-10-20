@@ -35,8 +35,6 @@ weight = 5
 max_per_fetch = 10
 ```
 
-`kind = "api"` for Jellyseerr and GitHub comes next, see the task note in the vault.
-
 ## Configuration
 
 | variable | default | meaning |
