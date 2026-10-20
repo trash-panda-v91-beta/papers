@@ -1,7 +1,7 @@
 {
 	"packages": {
 		".": {
-			"package-name": "papers",
+			"package-name": ".",
 			"release-type": "rust"
 		}
 	},

@@ -1,35 +1,34 @@
-import "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Builtins.pkl"
-import "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Config.pkl" as Config
-amends "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Config.pkl"
+
+amends "package://github.com/jdx/hk/releases/download/v2.6.0/hk@2.6.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.6.0/hk@2.6.0#/Builtins.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.6.0/hk@2.6.0#/Config.pkl" as Config
 
 fail_fast = false
 
 local linters = new Mapping<String, Step> {
   ["actionlint"] = Builtins.actionlint
   ["check-merge-conflict"] = Builtins.check_merge_conflict
+  ["rumdl"] = Builtins.rumdl
+  ["shellcheck"] = Builtins.shellcheck
+  ["tombi"] = Builtins.tombi
+  ["tombi-format"] = Builtins.tombi_format
+  ["yamlfmt"] = Builtins.yamlfmt
+  ["yamllint"] = Builtins.yamllint
   ["cargo-fmt"] = new Config.Step {
     glob = "**/*.rs"
-    workspace_indicator = "Cargo.toml"
-    check = "cargo fmt --check --manifest-path {{workspace_indicator}}"
-    fix = "cargo fmt --manifest-path {{workspace_indicator}}"
+    check = "cargo fmt --check"
+    fix = "cargo fmt"
     exclusive = true
   }
   ["cargo-clippy"] = new Config.Step {
     glob = "**/*.rs"
-    workspace_indicator = "Cargo.toml"
-    check = "cargo clippy --manifest-path {{workspace_indicator}} --quiet -- -D warnings"
-    fix =
-      "cargo clippy --manifest-path {{workspace_indicator}} --fix --allow-dirty --allow-staged --quiet"
+    check = "cargo clippy --quiet -- -D warnings"
+    fix = "cargo clippy --fix --allow-dirty --allow-staged --quiet"
     exclusive = true
     env {
       ["CARGO_TERM_PROGRESS_WHEN"] = "never"
     }
   }
-  ["rumdl"] = Builtins.rumdl
-  ["tombi"] = Builtins.tombi
-  ["tombi-format"] = Builtins.tombi_format
-  ["yamlfmt"] = Builtins.yamlfmt
-  ["yamllint"] = Builtins.yamllint
 }
 
 hooks {

@@ -1,13 +1,13 @@
 [tools]
 actionlint = "1.7.12"
-hk = "2.3.1"
+hk = "2.6.0"
 pkl = "0.32.1"
-rust = { version = "1.97.0", components = "rustfmt,clippy" }
 rumdl = "0.2.55"
+shellcheck = "0.11.0"
 tombi = "1.4.0"
 yamlfmt = "0.21.0"
 yamllint = "1.38.0"
-shellcheck = "0.11.0"
+rust = { version = "1.97.0", components = "rustfmt,clippy" }
 
 [tasks.check]
 description = "Run all checks"
@@ -20,3 +20,7 @@ run = "hk fix --all"
 [tasks.test]
 description = "Run tests"
 run = "cargo test"
+
+[tasks."repo:sync"]
+description = "Sync GitHub settings, labels and rulesets to the standard"
+run = "bash scripts/repo-sync.sh"

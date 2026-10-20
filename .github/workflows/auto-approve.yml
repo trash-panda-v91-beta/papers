@@ -22,6 +22,7 @@ jobs:
       (contains(github.event.pull_request.labels.*.name, 'approve/cl4') ||
        contains(github.event.pull_request.labels.*.name, 'approve/trashbot-9000') ||
        (github.event.pull_request.user.login == 'trashbot-9000[bot]' &&
+        startsWith(github.event.pull_request.head.ref, 'renovate/') &&
         !contains(github.event.pull_request.labels.*.name, 'type/major')))
     steps:
       - name: Determine approving bot from label
