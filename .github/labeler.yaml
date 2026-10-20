@@ -1,0 +1,10 @@
+---
+area/ci:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**/*"
+area/rust:
+  - changed-files:
+      - any-glob-to-any-file: "src/**/*"
+area/docker:
+  - changed-files:
+      - any-glob-to-any-file: "Dockerfile"

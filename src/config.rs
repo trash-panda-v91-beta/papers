@@ -67,7 +67,8 @@ impl Config {
     }
 
     pub fn path() -> PathBuf {
-        std::env::var("PAPERS_CONFIG").map_or_else(|_| PathBuf::from("/data/sources.toml"), PathBuf::from)
+        std::env::var("PAPERS_CONFIG")
+            .map_or_else(|_| PathBuf::from("/data/sources.toml"), PathBuf::from)
     }
 }
 

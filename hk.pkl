@@ -1,0 +1,50 @@
+import "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Builtins.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Config.pkl" as Config
+amends "package://github.com/jdx/hk/releases/download/v2.3.1/hk@2.3.1#/Config.pkl"
+
+fail_fast = false
+
+local linters = new Mapping<String, Step> {
+  ["actionlint"] = Builtins.actionlint
+  ["check-merge-conflict"] = Builtins.check_merge_conflict
+  ["cargo-fmt"] = new Config.Step {
+    glob = "**/*.rs"
+    workspace_indicator = "Cargo.toml"
+    check = "cargo fmt --check --manifest-path {{workspace_indicator}}"
+    fix = "cargo fmt --manifest-path {{workspace_indicator}}"
+    exclusive = true
+  }
+  ["cargo-clippy"] = new Config.Step {
+    glob = "**/*.rs"
+    workspace_indicator = "Cargo.toml"
+    check = "cargo clippy --manifest-path {{workspace_indicator}} --quiet -- -D warnings"
+    fix =
+      "cargo clippy --manifest-path {{workspace_indicator}} --fix --allow-dirty --allow-staged --quiet"
+    exclusive = true
+    env {
+      ["CARGO_TERM_PROGRESS_WHEN"] = "never"
+    }
+  }
+  ["rumdl"] = Builtins.rumdl
+  ["tombi"] = Builtins.tombi
+  ["tombi-format"] = Builtins.tombi_format
+  ["yamlfmt"] = Builtins.yamlfmt
+  ["yamllint"] = Builtins.yamllint
+}
+
+hooks {
+  ["check"] {
+    fix = false
+    steps = linters
+  }
+  ["fix"] {
+    fix = true
+    stash = "none"
+    steps = linters
+  }
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps = linters
+  }
+}

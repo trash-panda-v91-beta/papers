@@ -4,7 +4,11 @@ use crate::store::Item;
 
 pub const FEED_TITLE: &str = "papers";
 
-pub fn atom(feed_url: &str, digests: &[(String, String, String)], updated: DateTime<Utc>) -> String {
+pub fn atom(
+    feed_url: &str,
+    digests: &[(String, String, String)],
+    updated: DateTime<Utc>,
+) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     out.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">\n");
@@ -21,7 +25,9 @@ pub fn atom(feed_url: &str, digests: &[(String, String, String)], updated: DateT
             "    <updated>{}T06:00:00Z</updated>\n",
             escape(day)
         ));
-        out.push_str(&format!("    <link href=\"{feed_url}#{day}\" rel=\"alternate\"/>\n"));
+        out.push_str(&format!(
+            "    <link href=\"{feed_url}#{day}\" rel=\"alternate\"/>\n"
+        ));
         out.push_str(&format!(
             "    <content type=\"html\">{}</content>\n",
             escape(body)
@@ -73,7 +79,6 @@ mod tests {
             link: "https://lwn.net/1?a=1&b=2".into(),
             summary: String::new(),
             weight: 5,
-            score: Some(8),
             reason: Some("kernel change".into()),
         }
     }
@@ -91,8 +96,17 @@ mod tests {
         assert_eq!(feed.entries.len(), 1);
         let entry = &feed.entries[0];
         assert!(entry.title.as_ref().unwrap().content.contains("2026-10-20"));
-        let content = entry.content.as_ref().unwrap().body.as_deref().unwrap_or_default();
-        assert!(content.contains("a=1&amp;b=2"), "ampersand must be escaped: {content}");
+        let content = entry
+            .content
+            .as_ref()
+            .unwrap()
+            .body
+            .as_deref()
+            .unwrap_or_default();
+        assert!(
+            content.contains("a=1&amp;b=2"),
+            "ampersand must be escaped: {content}"
+        );
         assert!(content.contains("Rust 2.0 &amp; friends"));
     }
 }
