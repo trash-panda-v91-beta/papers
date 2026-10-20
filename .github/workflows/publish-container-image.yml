@@ -44,7 +44,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/papers
+          images: ghcr.io/ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
 
       - name: Build and push by digest
         id: build
@@ -54,7 +54,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/papers,push-by-digest=true,name-canonical=true
+          outputs: type=image,name=ghcr.io/ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }},push-by-digest=true,name-canonical=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
@@ -98,7 +98,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/papers
+          images: ghcr.io/ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
           tags: |
             ${{ github.event_name == 'workflow_dispatch' && 'type=raw,value=dev' }}
             ${{ github.event_name != 'workflow_dispatch' && 'type=ref,event=tag' }}
@@ -114,7 +114,7 @@ jobs:
 
           digests=()
           for f in *; do
-            digests+=("ghcr.io/${{ github.repository_owner }}/papers@sha256:${f}")
+            digests+=("ghcr.io/ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}@sha256:${f}")
           done
 
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
