@@ -1,0 +1,98 @@
+use chrono::{DateTime, SecondsFormat, Utc};
+
+use crate::store::Item;
+
+pub const FEED_TITLE: &str = "papers";
+
+pub fn atom(feed_url: &str, digests: &[(String, String, String)], updated: DateTime<Utc>) -> String {
+    let mut out = String::with_capacity(4096);
+    out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    out.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">\n");
+    out.push_str(&format!("  <title>{FEED_TITLE}</title>\n"));
+    out.push_str("  <id>tag:papers,2026:daily</id>\n");
+    out.push_str(&format!("  <link href=\"{feed_url}\" rel=\"self\"/>\n"));
+    out.push_str("  <author><name>papers</name></author>\n");
+    out.push_str(&format!("  <updated>{}</updated>\n", stamp(updated)));
+    for (day, title, body) in digests {
+        out.push_str("  <entry>\n");
+        out.push_str(&format!("    <title>{}</title>\n", escape(title)));
+        out.push_str(&format!("    <id>tag:papers,{day}:daily</id>\n"));
+        out.push_str(&format!(
+            "    <updated>{}T06:00:00Z</updated>\n",
+            escape(day)
+        ));
+        out.push_str(&format!("    <link href=\"{feed_url}#{day}\" rel=\"alternate\"/>\n"));
+        out.push_str(&format!(
+            "    <content type=\"html\">{}</content>\n",
+            escape(body)
+        ));
+        out.push_str("  </entry>\n");
+    }
+    out.push_str("</feed>\n");
+    out
+}
+
+pub fn paper_entry(day: &str, items: &[Item]) -> (String, String) {
+    let title = format!("{} - {} worth reading", day, items.len());
+    let mut body = String::from("<ul>");
+    for item in items {
+        let reason = item.reason.as_deref().unwrap_or("");
+        body.push_str(&format!(
+            "<li><a href=\"{}\">{}</a> <em>{}</em> <small>{}</small></li>",
+            escape(&item.link),
+            escape(&item.title),
+            escape(reason),
+            escape(&item.source)
+        ));
+    }
+    body.push_str("</ul>");
+    (title, body)
+}
+
+fn stamp(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(title: &str) -> Item {
+        Item {
+            id: 1,
+            source: "lwn".into(),
+            title: title.into(),
+            link: "https://lwn.net/1?a=1&b=2".into(),
+            summary: String::new(),
+            weight: 5,
+            score: Some(8),
+            reason: Some("kernel change".into()),
+        }
+    }
+
+    #[test]
+    fn renders_valid_atom_that_parses_back() {
+        let (title, body) = paper_entry("2026-10-20", &[item("Rust 2.0 & friends")]);
+        let xml = atom(
+            "https://papers.example/daily.xml",
+            &[("2026-10-20".to_string(), title, body)],
+            Utc::now(),
+        );
+        let feed = feed_rs::parser::parse(xml.as_bytes()).expect("atom must parse");
+        assert_eq!(feed.title.map(|t| t.content).as_deref(), Some(FEED_TITLE));
+        assert_eq!(feed.entries.len(), 1);
+        let entry = &feed.entries[0];
+        assert!(entry.title.as_ref().unwrap().content.contains("2026-10-20"));
+        let content = entry.content.as_ref().unwrap().body.as_deref().unwrap_or_default();
+        assert!(content.contains("a=1&amp;b=2"), "ampersand must be escaped: {content}");
+        assert!(content.contains("Rust 2.0 &amp; friends"));
+    }
+}
