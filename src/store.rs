@@ -57,7 +57,11 @@ impl Store {
     }
 
     pub fn insert(&self, item: &NewItem) -> Result<bool> {
-        let hash = format!("{:x}", Sha256::digest(item.link.as_bytes()));
+        // sha2 0.11 output is a hybrid-array Array<u8, U32>, which has no LowerHex
+        let hash = Sha256::digest(item.link.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         let changed = self.conn.execute(
             "insert or ignore into items
                  (url_hash, source, title, link, summary, published, fetched_at, weight)
