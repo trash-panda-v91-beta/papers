@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 
 pub struct Store {
@@ -25,7 +25,6 @@ pub struct Item {
     pub link: String,
     pub summary: String,
     pub weight: i64,
-    pub score: Option<i64>,
     pub reason: Option<String>,
 }
 
@@ -79,7 +78,7 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, score, reason
+            "select id, source, title, link, summary, weight, reason
              from items where shown = 0 and score is null
              order by weight desc, fetched_at desc limit ?1",
         )?;
@@ -91,8 +90,7 @@ impl Store {
                 link: row.get(3)?,
                 summary: row.get(4)?,
                 weight: row.get(5)?,
-                score: row.get(6)?,
-                reason: row.get(7)?,
+                reason: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -108,7 +106,7 @@ impl Store {
 
     pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, score, reason
+            "select id, source, title, link, summary, weight, reason
              from items where shown = 0 and score >= 5
              order by score desc, weight desc, fetched_at desc limit ?1",
         )?;
@@ -120,8 +118,7 @@ impl Store {
                 link: row.get(3)?,
                 summary: row.get(4)?,
                 weight: row.get(5)?,
-                score: row.get(6)?,
-                reason: row.get(7)?,
+                reason: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -153,15 +150,6 @@ impl Store {
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
-
-    pub fn last_digest_day(&self) -> Result<Option<String>> {
-        Ok(self
-            .conn
-            .query_row("select day from digests order by day desc limit 1", [], |row| {
-                row.get(0)
-            })
-            .optional()?)
-    }
 }
 
 #[cfg(test)]
@@ -183,13 +171,19 @@ mod tests {
     fn dedupes_by_link_and_respects_score_floor() {
         let store = Store::open(":memory:").unwrap();
         assert!(store.insert(&item("https://a/1")).unwrap());
-        assert!(!store.insert(&item("https://a/1")).unwrap(), "same link must not insert twice");
+        assert!(
+            !store.insert(&item("https://a/1")).unwrap(),
+            "same link must not insert twice"
+        );
 
         let unseen = store.unseen(10).unwrap();
         assert_eq!(unseen.len(), 1);
 
         store.set_score(unseen[0].id, 3, "meh").unwrap();
-        assert!(store.top(10).unwrap().is_empty(), "score below 5 is not shown");
+        assert!(
+            store.top(10).unwrap().is_empty(),
+            "score below 5 is not shown"
+        );
 
         assert!(store.insert(&item("https://a/2")).unwrap());
         let next = store.unseen(10).unwrap();
@@ -201,6 +195,5 @@ mod tests {
 
         store.save_digest("2026-10-20", "day", "<p>hi</p>").unwrap();
         assert_eq!(store.digests(5).unwrap().len(), 1);
-        assert_eq!(store.last_digest_day().unwrap().as_deref(), Some("2026-10-20"));
     }
 }

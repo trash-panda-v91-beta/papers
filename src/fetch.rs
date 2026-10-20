@@ -149,9 +149,6 @@ mod tests {
             .filter_map(|a| a.value().attr("href"))
             .map(|h| base.join(h).unwrap().to_string())
             .collect();
-        assert_eq!(
-            links,
-            vec!["https://example.com/one", "https://x/two"]
-        );
+        assert_eq!(links, vec!["https://example.com/one", "https://x/two"]);
     }
 }

@@ -16,11 +16,16 @@ pub fn prefilter(items: Vec<Item>, rank: &Rank) -> Vec<Item> {
         .into_iter()
         .filter(|item| {
             let haystack = format!("{} {}", item.title, item.summary).to_lowercase();
-            if rank.exclude.iter().any(|word| haystack.contains(&word.to_lowercase())) {
+            if rank
+                .exclude
+                .iter()
+                .any(|word| haystack.contains(&word.to_lowercase()))
+            {
                 return false;
             }
             rank.require_any.is_empty()
-                || rank.require_any
+                || rank
+                    .require_any
                     .iter()
                     .any(|word| haystack.contains(&word.to_lowercase()))
         })
@@ -74,7 +79,13 @@ pub struct Verdict {
     pub reason: String,
 }
 
-pub async fn score(client: &Client, base_url: &str, model: &str, key: &str, items: &[Item]) -> Result<Vec<Verdict>> {
+pub async fn score(
+    client: &Client,
+    base_url: &str,
+    model: &str,
+    key: &str,
+    items: &[Item],
+) -> Result<Vec<Verdict>> {
     if items.is_empty() {
         return Ok(Vec::new());
     }
@@ -104,11 +115,16 @@ pub async fn score(client: &Client, base_url: &str, model: &str, key: &str, item
             },
         ],
         temperature: 0.2,
-        response_format: ResponseFormat { kind: "json_object" },
+        response_format: ResponseFormat {
+            kind: "json_object",
+        },
     };
 
     let response = client
-        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
+        .post(format!(
+            "{}/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
         .bearer_auth(key)
         .json(&request)
         .send()
@@ -141,7 +157,6 @@ mod tests {
             link: "https://x/1".into(),
             summary: summary.into(),
             weight: 5,
-            score: None,
             reason: None,
         }
     }
