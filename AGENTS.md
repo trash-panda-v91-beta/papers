@@ -6,9 +6,9 @@ daily Atom paper. Replaces the nginx feed host and the Python digest scripts in 
 ## Commands
 
 ```bash
-mise run check    # cargo fmt --check, clippy with -D warnings, tests
-mise run fix      # cargo fmt, clippy --fix
-cargo test        # unit tests live inside each module
+mise run check    # hk check --all: fmt, clippy with -D warnings, actionlint, yaml, toml, markdown
+mise run fix      # hk fix --all
+mise run test     # cargo test, unit tests live inside each module
 ```
 
 `mise run` is the command surface. No direct tool invocation needed beyond cargo.

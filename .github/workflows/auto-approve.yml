@@ -1,0 +1,64 @@
+---
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Auto Approve
+
+on:
+  pull_request_target:
+    types:
+      - labeled
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  auto-approve:
+    name: Auto Approve
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(github.event.pull_request.labels.*.name, 'approve/cl4') ||
+       contains(github.event.pull_request.labels.*.name, 'approve/trashbot-9000'))
+    steps:
+      - name: Determine approving bot from label
+        id: bot
+        run: |
+          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'approve/cl4') }}" == "true" ]]; then
+            echo "label=cl4" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'approve/trashbot-9000') }}" == "true" ]]; then
+            echo "label=trashbot" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate CL4 App Token
+        if: steps.bot.outputs.label == 'cl4'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: cl4-token
+        with:
+          client-id: ${{ vars.CL4_APP_ID }}
+          private-key: ${{ secrets.CL4_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+
+      - name: Generate TrashBot-9000 App Token
+        if: steps.bot.outputs.label == 'trashbot'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: trashbot-token
+        with:
+          client-id: ${{ vars.TRASHBOT_APP_ID }}
+          private-key: ${{ secrets.TRASHBOT_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+
+      - name: Approve PR (gh)
+        env:
+          GH_TOKEN: >-
+            ${{
+              steps.bot.outputs.label == 'cl4'
+                && steps.cl4-token.outputs.token
+                || steps.trashbot-token.outputs.token
+            }}
+        run: |-
+          gh api \
+            --method POST \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            -f event=APPROVE \
+            -f body="Auto-approved by ${{ steps.bot.outputs.label }} bot."

@@ -1,0 +1,39 @@
+---
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Auto Merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    name: Enable Auto Merge
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    steps:
+      - name: Generate Token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.TRASHBOT_APP_ID }}
+          private-key: ${{ secrets.TRASHBOT_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: write
+
+      - name: Enable Auto Merge (squash via gh)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |-
+          gh pr merge \
+            --repo "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            --auto \
+            --squash
