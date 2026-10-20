@@ -86,8 +86,8 @@ async fn fetch_html(
             let href = node
                 .select(&link_sel)
                 .next()
-                .or(Some(&node))
-                .and_then(|n| n.value().attr("href"))?;
+                .and_then(|n| n.value().attr("href"))
+                .or_else(|| node.value().attr("href"))?;
             let link = base.join(href).ok()?.to_string();
             let title = node
                 .select(&title_sel)
@@ -140,10 +140,12 @@ mod tests {
     fn html_items_resolve_relative_links() {
         let body = r#"<div class="t"><a href="/one">First</a></div><div class="t"><a href="https://x/two">Second</a></div>"#;
         let doc = Html::parse_document(body);
-        let items = doc.select(&selector("div.t").unwrap());
+        let item_sel = selector("div.t").unwrap();
+        let link_sel = selector("a").unwrap();
+        let items = doc.select(&item_sel);
         let base = Url::parse("https://example.com/index").unwrap();
         let links: Vec<String> = items
-            .filter_map(|n| n.select(&selector("a").unwrap()).next())
+            .filter_map(|n| n.select(&link_sel).next())
             .filter_map(|a| a.value().attr("href"))
             .map(|h| base.join(h).unwrap().to_string())
             .collect();

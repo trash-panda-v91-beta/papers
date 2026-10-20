@@ -95,9 +95,16 @@ async fn run(use_model: bool) -> Result<()> {
     }
 
     if use_model {
-        if let Err(error) = score_with_model(&http, &candidates, &store).await {
-            warn!(%error, "model scoring failed, falling back to source weights");
-            score_by_weight(&candidates, &store, "rule score (model unavailable)")?;
+        match score_with_model(&http, &candidates).await {
+            Ok(verdicts) => {
+                for verdict in verdicts {
+                    store.set_score(verdict.id, verdict.score, &verdict.reason)?;
+                }
+            }
+            Err(error) => {
+                warn!(%error, "model scoring failed, falling back to source weights");
+                score_by_weight(&candidates, &store, "rule score (model unavailable)")?;
+            }
         }
     } else {
         score_by_weight(&candidates, &store, "rule score")?;
@@ -128,15 +135,11 @@ fn score_by_weight(items: &[Item], store: &Store, reason: &str) -> Result<()> {
 async fn score_with_model(
     http: &reqwest::Client,
     candidates: &[Item],
-    store: &Store,
-) -> Result<()> {
+) -> Result<Vec<rank::Verdict>> {
     let base = env::var("PAPERS_LLM_URL").unwrap_or_else(|_| DEFAULT_LLM_URL.to_string());
     let model = env::var("PAPERS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_string());
     let key = env::var("PAPERS_LLM_KEY").unwrap_or_default();
-    for verdict in rank::score(http, &base, &model, &key, candidates).await? {
-        store.set_score(verdict.id, verdict.score, &verdict.reason)?;
-    }
-    Ok(())
+    rank::score(http, &base, &model, &key, candidates).await
 }
 
 fn write_feed(store: &Store) -> Result<()> {
