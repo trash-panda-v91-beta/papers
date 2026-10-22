@@ -45,6 +45,9 @@ pub enum SourceKind {
         #[serde(default)]
         summary: Option<String>,
     },
+    Seerr {
+        url: String,
+    },
 }
 
 fn default_keep() -> usize {
@@ -77,7 +80,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_both_source_kinds() {
+    fn parses_all_source_kinds() {
         let raw = r#"
 keep_per_day = 8
 [rank]
@@ -97,6 +100,11 @@ url = "https://lwn.net/"
 item = "div.ArticleTitle a"
 title = "a"
 link = "a"
+
+[[sources]]
+name = "seerr"
+kind = "seerr"
+url = "http://seerr:80"
 "#;
         let dir = std::env::temp_dir().join("ng-feeds-config-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -105,9 +113,13 @@ link = "a"
 
         let config = Config::load(&path).unwrap();
         assert_eq!(config.keep_per_day, 8);
-        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.sources.len(), 3);
         assert_eq!(config.sources[0].weight, 8);
         assert_eq!(config.sources[1].weight, default_weight());
         assert_eq!(config.rank.exclude, vec!["giveaway".to_string()]);
+        assert!(matches!(
+            config.sources[2].kind,
+            SourceKind::Seerr { ref url } if url == "http://seerr:80"
+        ));
     }
 }

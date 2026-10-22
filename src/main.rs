@@ -9,10 +9,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use chrono::{Local, TimeDelta, Utc};
+use serde::Deserialize;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -78,6 +80,7 @@ async fn run(use_model: bool) -> Result<()> {
                         summary: item.summary,
                         published: item.published,
                         weight: source.weight,
+                        extra: item.extra,
                     };
                     if store.insert(&new_item)? {
                         added += 1;
@@ -94,8 +97,19 @@ async fn run(use_model: bool) -> Result<()> {
         return Ok(());
     }
 
+    // seerr picks are not news; the reading scorer would fail them every time
+    let seerr_names: Vec<&str> = config
+        .sources
+        .iter()
+        .filter(|source| matches!(source.kind, config::SourceKind::Seerr { .. }))
+        .map(|source| source.name.as_str())
+        .collect();
+    let (media, news): (Vec<Item>, Vec<Item>) = candidates
+        .into_iter()
+        .partition(|item| seerr_names.contains(&item.source.as_str()));
+
     if use_model {
-        match score_with_model(&http, &candidates).await {
+        match score_with_model(&http, &news).await {
             Ok(verdicts) => {
                 for verdict in verdicts {
                     store.set_score(verdict.id, verdict.score, &verdict.reason)?;
@@ -103,12 +117,13 @@ async fn run(use_model: bool) -> Result<()> {
             }
             Err(error) => {
                 warn!(%error, "model scoring failed, falling back to source weights");
-                score_by_weight(&candidates, &store, "rule score (model unavailable)")?;
+                score_by_weight(&news, &store, "rule score (model unavailable)")?;
             }
         }
     } else {
-        score_by_weight(&candidates, &store, "rule score")?;
+        score_by_weight(&news, &store, "rule score")?;
     }
+    score_by_weight(&media, &store, "trending pick")?;
 
     let top = store.top(config.keep_per_day)?;
     if top.is_empty() {
@@ -145,8 +160,7 @@ async fn score_with_model(
 fn write_feed(store: &Store) -> Result<()> {
     let dir = out_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {dir}"))?;
-    let url = env::var("PAPERS_FEED_URL")
-        .unwrap_or_else(|_| "http://localhost:8080/daily.xml".to_string());
+    let url = format!("{}/daily.xml", fetch::public_base());
     let xml = render::atom(&url, &store.digests(30)?, Utc::now());
     std::fs::write(format!("{dir}/daily.xml"), xml)
         .with_context(|| format!("writing {dir}/daily.xml"))?;
@@ -168,9 +182,20 @@ async fn serve() -> Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
+    let seerr = Config::load(&Config::path()).ok().and_then(|config| {
+        config
+            .sources
+            .into_iter()
+            .find_map(|source| match source.kind {
+                config::SourceKind::Seerr { url } => Some(url),
+                _ => None,
+            })
+    });
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .route("/daily.xml", get(serve_feed));
+        .route("/daily.xml", get(serve_feed))
+        .route("/add", get(add_media))
+        .with_state(seerr);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     info!(port, "serving the paper");
     axum::serve(listener, app).await?;
@@ -185,6 +210,57 @@ async fn serve_feed() -> Response {
         )
             .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "no paper printed yet").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddParams {
+    media: i64,
+    media_type: String,
+}
+
+// GET mutates on purpose: the feed only offers plain anchors, and this is a
+// LAN-only service nothing crawls
+async fn add_media(
+    State(seerr_url): State<Option<String>>,
+    Query(params): Query<AddParams>,
+) -> Response {
+    let Some(url) = seerr_url else {
+        return (StatusCode::NOT_FOUND, "no seerr source configured").into_response();
+    };
+    let Ok(key) = env::var("SEERR_API_KEY") else {
+        return (StatusCode::NOT_FOUND, "SEERR_API_KEY not set").into_response();
+    };
+    if params.media_type != "movie" && params.media_type != "tv" {
+        return (StatusCode::BAD_REQUEST, "media_type must be movie or tv").into_response();
+    }
+    let client = match http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let response = client
+        .post(format!("{}/api/v1/request", url.trim_end_matches('/')))
+        .header("X-Api-Key", key)
+        .json(&serde_json::json!({
+            "mediaId": params.media,
+            "mediaType": params.media_type,
+        }))
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => Redirect::temporary(&format!(
+            "https://www.themoviedb.org/{}/{}",
+            params.media_type, params.media
+        ))
+        .into_response(),
+        Ok(response) => (
+            StatusCode::BAD_GATEWAY,
+            format!("seerr said: {}", response.status()),
+        )
+            .into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
     }
 }
 
