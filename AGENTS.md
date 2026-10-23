@@ -15,7 +15,7 @@ mise run test     # cargo test, unit tests live inside each module
 
 ## Layout
 
-- `src/config.rs` - `sources.toml` parsing, source kinds `feed` and `html`
+- `src/config.rs` - `sources.toml` parsing, source kinds `feed`, `html` and `seerr`
 - `src/fetch.rs` - pulls one source into normalized items, resolves relative links
 - `src/store.rs` - SQLite: `items` deduped by link hash, `digests` one row per day
 - `src/rank.rs` - keyword prefilter, then model scoring over the survivors

@@ -158,6 +158,7 @@ mod tests {
             summary: summary.into(),
             weight: 5,
             reason: None,
+            extra: String::new(),
         }
     }
 

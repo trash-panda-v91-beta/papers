@@ -15,6 +15,7 @@ pub struct NewItem {
     pub summary: String,
     pub published: Option<DateTime<Utc>>,
     pub weight: i64,
+    pub extra: String,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub struct Item {
     pub summary: String,
     pub weight: i64,
     pub reason: Option<String>,
+    pub extra: String,
 }
 
 impl Store {
@@ -44,7 +46,8 @@ impl Store {
                  weight integer not null,
                  score integer,
                  reason text,
-                 shown integer not null default 0
+                 shown integer not null default 0,
+                 extra text not null default ''
              );
              create table if not exists digests (
                  day text primary key,
@@ -64,8 +67,8 @@ impl Store {
             .collect::<String>();
         let changed = self.conn.execute(
             "insert or ignore into items
-                 (url_hash, source, title, link, summary, published, fetched_at, weight)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 hash,
                 item.source,
@@ -75,6 +78,7 @@ impl Store {
                 item.published.map(|d| d.to_rfc3339()),
                 Utc::now().to_rfc3339(),
                 item.weight,
+                item.extra,
             ],
         )?;
         Ok(changed == 1)
@@ -82,7 +86,7 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason
+            "select id, source, title, link, summary, weight, reason, extra
              from items where shown = 0 and score is null
              order by weight desc, fetched_at desc limit ?1",
         )?;
@@ -95,6 +99,7 @@ impl Store {
                 summary: row.get(4)?,
                 weight: row.get(5)?,
                 reason: row.get(6)?,
+                extra: row.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -110,7 +115,7 @@ impl Store {
 
     pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason
+            "select id, source, title, link, summary, weight, reason, extra
              from items where shown = 0 and score >= 5
              order by score desc, weight desc, fetched_at desc limit ?1",
         )?;
@@ -123,6 +128,7 @@ impl Store {
                 summary: row.get(4)?,
                 weight: row.get(5)?,
                 reason: row.get(6)?,
+                extra: row.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -168,6 +174,7 @@ mod tests {
             summary: String::new(),
             published: None,
             weight: 5,
+            extra: String::new(),
         }
     }
 
@@ -199,5 +206,14 @@ mod tests {
 
         store.save_digest("2026-10-20", "day", "<p>hi</p>").unwrap();
         assert_eq!(store.digests(5).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn extra_round_trips() {
+        let store = Store::open(":memory:").unwrap();
+        let mut new = item("https://a/1");
+        new.extra = "<a href=\"https://x\">trailer</a>".into();
+        store.insert(&new).unwrap();
+        assert_eq!(store.unseen(10).unwrap()[0].extra, new.extra);
     }
 }

@@ -44,9 +44,10 @@ pub fn paper_entry(day: &str, items: &[Item]) -> (String, String) {
     for item in items {
         let reason = item.reason.as_deref().unwrap_or("");
         body.push_str(&format!(
-            "<li><a href=\"{}\">{}</a> <em>{}</em> <small>{}</small></li>",
+            "<li><a href=\"{}\">{}</a> {} <em>{}</em> <small>{}</small></li>",
             escape(&item.link),
             escape(&item.title),
+            item.extra,
             escape(reason),
             escape(&item.source)
         ));
@@ -59,7 +60,7 @@ fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -80,6 +81,7 @@ mod tests {
             summary: String::new(),
             weight: 5,
             reason: Some("kernel change".into()),
+            extra: String::new(),
         }
     }
 
@@ -108,5 +110,17 @@ mod tests {
             "ampersand must be escaped: {content}"
         );
         assert!(content.contains("Rust 2.0 &amp; friends"));
+    }
+
+    #[test]
+    fn entry_keeps_extra_anchors_verbatim() {
+        let mut with_extra = item("Dune: Part Two (2024)");
+        with_extra.extra =
+            "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
+                .into();
+        let (_, body) = paper_entry("2026-10-20", &[with_extra]);
+        assert!(body.contains(
+            "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
+        ));
     }
 }
