@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.0...v0.2.1) (2026-10-23)
+
+
+### Features
+
+* seerr source kind with trailer and one-click request links ([#19](https://github.com/trash-panda-v91-beta/papers/issues/19)) ([9113d28](https://github.com/trash-panda-v91-beta/papers/commit/9113d28f88829341747ed04b6a01e6b01c444b6e))
+
 ## [0.2.0](https://github.com/trash-panda-v91-beta/papers/compare/v0.1.0...v0.2.0) (2026-10-22)
 
 
