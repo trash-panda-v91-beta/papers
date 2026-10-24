@@ -16,6 +16,7 @@ pub struct NewItem {
     pub published: Option<DateTime<Utc>>,
     pub weight: i64,
     pub extra: String,
+    pub feed: String,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ pub struct Item {
     pub weight: i64,
     pub reason: Option<String>,
     pub extra: String,
+    pub feed: String,
 }
 
 impl Store {
@@ -50,10 +52,12 @@ impl Store {
                  extra text not null default ''
              );
              create table if not exists digests (
-                 day text primary key,
+                 day text not null,
+                 feed text not null default 'news',
                  title text not null,
                  body text not null,
-                 created_at text not null
+                 created_at text not null,
+                 primary key (day, feed)
              );
              create table if not exists config (
                  id integer primary key check (id = 1),
@@ -61,9 +65,53 @@ impl Store {
                  updated_at text not null
              );",
         )?;
+        Self::migrate(&conn)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .context("setting busy timeout")?;
         Ok(Self { conn })
+    }
+
+    /// older databases: items without a feed column, digests keyed by day
+    /// only - widen them in place, carrying existing rows into the news feed
+    fn migrate(conn: &Connection) -> Result<()> {
+        let has_column = |table: &str, column: &str| -> Result<bool> {
+            let mut stmt = conn.prepare(&format!("pragma table_info({table})"))?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                if row.get::<_, String>(1)? == column {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        if !has_column("items", "extra")? {
+            conn.execute_batch("alter table items add column extra text not null default '';")?;
+        }
+        if !has_column("items", "feed")? {
+            conn.execute_batch(
+                "alter table items add column feed text not null default 'news';
+                 update items set feed = 'news';",
+            )?;
+        }
+        if !has_column("digests", "feed")? {
+            conn.execute_batch(
+                "begin;
+                 create table digests_new (
+                     day text not null,
+                     feed text not null default 'news',
+                     title text not null,
+                     body text not null,
+                     created_at text not null,
+                     primary key (day, feed)
+                 );
+                 insert or ignore into digests_new
+                     select day, 'news', title, body, created_at from digests;
+                 drop table digests;
+                 alter table digests_new rename to digests;
+                 commit;",
+            )?;
+        }
+        Ok(())
     }
 
     /// live config overrides the seeded file; stored once and then owned by
@@ -105,8 +153,8 @@ impl Store {
             .collect::<String>();
         let changed = self.conn.execute(
             "insert or ignore into items
-                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, feed)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 hash,
                 item.source,
@@ -117,6 +165,7 @@ impl Store {
                 Utc::now().to_rfc3339(),
                 item.weight,
                 item.extra,
+                item.feed,
             ],
         )?;
         Ok(changed == 1)
@@ -124,7 +173,7 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra
+            "select id, source, title, link, summary, weight, reason, extra, feed
              from items where shown = 0 and score is null
              order by weight desc, fetched_at desc limit ?1",
         )?;
@@ -138,6 +187,7 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                feed: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -153,7 +203,7 @@ impl Store {
 
     pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra
+            "select id, source, title, link, summary, weight, reason, extra, feed
              from items where shown = 0 and score >= 5
              order by score desc, weight desc, fetched_at desc limit ?1",
         )?;
@@ -167,6 +217,7 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                feed: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -180,20 +231,30 @@ impl Store {
         Ok(())
     }
 
-    pub fn save_digest(&self, day: &str, title: &str, body: &str) -> Result<()> {
+    pub fn save_digest(&self, day: &str, feed: &str, title: &str, body: &str) -> Result<()> {
         self.conn.execute(
-            "insert into digests (day, title, body, created_at) values (?1, ?2, ?3, ?4)
-             on conflict(day) do update set title = excluded.title, body = excluded.body",
-            params![day, title, body, Utc::now().to_rfc3339()],
+            "insert into digests (day, feed, title, body, created_at)
+             values (?1, ?2, ?3, ?4, ?5)
+             on conflict(day, feed) do update set title = excluded.title,
+                 body = excluded.body",
+            params![day, feed, title, body, Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }
 
-    pub fn digests(&self, keep: usize) -> Result<Vec<(String, String, String)>> {
+    pub fn feeds(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("select day, title, body from digests order by day desc limit ?1")?;
-        let rows = stmt.query_map([keep as i64], |row| {
+            .prepare("select distinct feed from digests order by feed")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn digests(&self, feed: &str, keep: usize) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "select day, title, body from digests where feed = ?1 order by day desc limit ?2",
+        )?;
+        let rows = stmt.query_map(params![feed, keep as i64], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -213,6 +274,7 @@ mod tests {
             published: None,
             weight: 5,
             extra: String::new(),
+            feed: "news".into(),
         }
     }
 
@@ -242,8 +304,72 @@ mod tests {
         store.mark_shown(&[top[0].id]).unwrap();
         assert!(store.top(10).unwrap().is_empty(), "shown items drop out");
 
-        store.save_digest("2026-10-20", "day", "<p>hi</p>").unwrap();
-        assert_eq!(store.digests(5).unwrap().len(), 1);
+        store
+            .save_digest("2026-10-20", "news", "day", "<p>hi</p>")
+            .unwrap();
+        assert_eq!(store.digests("news", 5).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn digests_partition_by_feed() {
+        let store = Store::open(":memory:").unwrap();
+        store
+            .save_digest("2026-10-20", "news", "n", "<p>n</p>")
+            .unwrap();
+        store
+            .save_digest("2026-10-20", "media", "m", "<p>m</p>")
+            .unwrap();
+        store
+            .save_digest("2026-10-21", "news", "n2", "<p>n2</p>")
+            .unwrap();
+        assert_eq!(store.feeds().unwrap(), vec!["media", "news"]);
+        assert_eq!(store.digests("news", 30).unwrap().len(), 2);
+        assert_eq!(store.digests("media", 30).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_carries_old_digests_into_news() {
+        // build a v0.2-style database by hand, then let Store::open migrate it
+        let path = std::env::temp_dir().join(format!("papers-mig-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "create table items (
+                 id integer primary key,
+                 url_hash text not null unique,
+                 source text not null,
+                 title text not null,
+                 link text not null,
+                 summary text not null default '',
+                 published text,
+                 fetched_at text not null,
+                 weight integer not null,
+                 score integer,
+                 reason text,
+                 shown integer not null default 0
+             );
+             create table digests (
+                 day text primary key,
+                 title text not null,
+                 body text not null,
+                 created_at text not null
+             );
+             insert into items (url_hash, source, title, link, fetched_at, weight)
+                 values ('h', 'lwn', 't', 'https://a/1', '2026-10-20', 5);
+             insert into digests values ('2026-10-20', 'day', '<p>old</p>', '2026-10-20');
+             insert into digests values ('2026-10-21', 'day2', '<p>old2</p>', '2026-10-21');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(store.feeds().unwrap(), vec!["news"]);
+        assert_eq!(store.digests("news", 30).unwrap().len(), 2);
+        // migrated items show up in the news feed, and new links still dedupe
+        assert_eq!(store.unseen(10).unwrap()[0].feed, "news");
+        assert!(store.insert(&item("https://a/2")).unwrap());
+        assert_eq!(store.unseen(10).unwrap().len(), 2);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

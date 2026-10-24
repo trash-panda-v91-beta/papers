@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -82,6 +82,7 @@ async fn run(use_model: bool) -> Result<()> {
                         published: item.published,
                         weight: source.weight,
                         extra: item.extra,
+                        feed: source.feed.clone().unwrap_or_else(|| "news".into()),
                     };
                     if store.insert(&new_item)? {
                         added += 1;
@@ -137,12 +138,20 @@ async fn run(use_model: bool) -> Result<()> {
         return Ok(());
     }
     let day = Local::now().format("%Y-%m-%d").to_string();
-    let (title, body) = render::paper_entry(&day, &top);
-    store.save_digest(&day, &title, &body)?;
-    let ids: Vec<i64> = top.iter().map(|item| item.id).collect();
-    store.mark_shown(&ids)?;
+    // one digest per feed so news and media get their own files
+    let mut by_feed: HashMap<String, Vec<Item>> = HashMap::new();
+    for item in top {
+        by_feed.entry(item.feed.clone()).or_default().push(item);
+    }
+    let mut shown_ids: Vec<i64> = Vec::new();
+    for (feed, items) in &by_feed {
+        let (title, body) = render::paper_entry(&day, feed, items);
+        store.save_digest(&day, feed, &title, &body)?;
+        shown_ids.extend(items.iter().map(|item| item.id));
+    }
+    store.mark_shown(&shown_ids)?;
     write_feed(&store)?;
-    info!(day = %day, kept = ids.len(), "paper printed");
+    info!(day = %day, feeds = by_feed.len(), kept = shown_ids.len(), "paper printed");
     Ok(())
 }
 
@@ -183,10 +192,13 @@ fn effective_config(store: &Store) -> Result<Config> {
 fn write_feed(store: &Store) -> Result<()> {
     let dir = out_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {dir}"))?;
-    let url = format!("{}/daily.xml", fetch::public_base());
-    let xml = render::atom(&url, &store.digests(30)?, Utc::now());
-    std::fs::write(format!("{dir}/daily.xml"), xml)
-        .with_context(|| format!("writing {dir}/daily.xml"))?;
+    let base = fetch::public_base();
+    for feed in store.feeds()? {
+        let url = format!("{base}/{feed}.xml");
+        let xml = render::atom(&feed, &url, &store.digests(&feed, 30)?, Utc::now());
+        std::fs::write(format!("{dir}/{feed}.xml"), xml)
+            .with_context(|| format!("writing {dir}/{feed}.xml"))?;
+    }
     Ok(())
 }
 
@@ -217,7 +229,7 @@ async fn serve() -> Result<()> {
     });
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .route("/daily.xml", get(serve_feed))
+        .route("/{feed}.xml", get(serve_feed))
         .route("/add", get(add_media))
         .route("/admin/config", get(admin_get_config).put(admin_put_config))
         .route("/admin/run", post(admin_run))
@@ -234,14 +246,23 @@ struct AppState {
     seerr: Option<String>,
 }
 
-async fn serve_feed() -> Response {
-    match tokio::fs::read_to_string(format!("{}/daily.xml", out_dir())).await {
+async fn serve_feed(Path(feed): Path<String>) -> Response {
+    // the feed name comes from the URL - only clean names reach the filesystem
+    if !feed.ends_with(".xml")
+        || !feed
+            .trim_end_matches(".xml")
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return (StatusCode::NOT_FOUND, "no such feed").into_response();
+    }
+    match tokio::fs::read_to_string(format!("{}/{}", out_dir(), feed)).await {
         Ok(body) => (
             [(header::CONTENT_TYPE, "application/atom+xml; charset=utf-8")],
             body,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "no paper printed yet").into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "no such feed").into_response(),
     }
 }
 

@@ -18,9 +18,9 @@ weight = 6
 max_per_fetch = 40
 
 [[sources]]
-name = "kubernetes-blog"
+name = "selfh-st"
 kind = "feed"
-url = "https://kubernetes.io/feed.xml"
+url = "https://selfh.st/rss/"
 weight = 9
 
 [[sources]]
@@ -36,9 +36,11 @@ max_per_fetch = 10
 
 # Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment;
 # each item gets trailer and add links, the add one requests the title in Seerr.
+# feed = media publishes into media.xml instead of the default news.xml.
 [[sources]]
 name = "seerr-trending"
 kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
+feed = "media"
 weight = 7
 max_per_fetch = 10
