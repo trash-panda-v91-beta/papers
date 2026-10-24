@@ -4,15 +4,16 @@ mod rank;
 mod render;
 mod store;
 
+use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use chrono::{Local, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{info, warn};
@@ -64,8 +65,8 @@ fn http_client() -> Result<reqwest::Client> {
 }
 
 async fn run(use_model: bool) -> Result<()> {
-    let config = Config::load(&Config::path())?;
     let store = Store::open(&db_path())?;
+    let config = effective_config(&store)?;
     let http = http_client()?;
 
     let mut added = 0usize;
@@ -109,7 +110,12 @@ async fn run(use_model: bool) -> Result<()> {
         .partition(|item| seerr_names.contains(&item.source.as_str()));
 
     if use_model {
-        match score_with_model(&http, &news).await {
+        let prompt = config
+            .rank
+            .prompt
+            .clone()
+            .unwrap_or_else(|| rank::DEFAULT_PROMPT.to_string());
+        match score_with_model(&http, &prompt, &news).await {
             Ok(verdicts) => {
                 for verdict in verdicts {
                     store.set_score(verdict.id, verdict.score, &verdict.reason)?;
@@ -149,12 +155,29 @@ fn score_by_weight(items: &[Item], store: &Store, reason: &str) -> Result<()> {
 
 async fn score_with_model(
     http: &reqwest::Client,
+    prompt: &str,
     candidates: &[Item],
 ) -> Result<Vec<rank::Verdict>> {
     let base = env::var("PAPERS_LLM_URL").unwrap_or_else(|_| DEFAULT_LLM_URL.to_string());
     let model = env::var("PAPERS_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_string());
     let key = env::var("PAPERS_LLM_KEY").unwrap_or_default();
-    rank::score(http, &base, &model, &key, candidates).await
+    rank::score(http, &base, &model, &key, prompt, candidates).await
+}
+
+/// stored config wins over the seeded file; the file only bootstraps an empty
+/// store, so Flux cannot revert live ranking edits
+fn effective_config(store: &Store) -> Result<Config> {
+    let raw = match store.load_config()? {
+        Some(raw) => raw,
+        None => {
+            let raw = std::fs::read_to_string(Config::path())
+                .with_context(|| format!("reading {}", Config::path().display()))?;
+            store.save_config(&raw)?;
+            info!("seeded live config from {}", Config::path().display());
+            raw
+        }
+    };
+    Config::parse(&raw)
 }
 
 fn write_feed(store: &Store) -> Result<()> {
@@ -168,7 +191,8 @@ fn write_feed(store: &Store) -> Result<()> {
 }
 
 async fn serve() -> Result<()> {
-    write_feed(&Store::open(&db_path())?)?;
+    let store = Store::open(&db_path())?;
+    write_feed(&store)?;
     tokio::spawn(async {
         loop {
             if let Err(error) = run(true).await {
@@ -182,7 +206,7 @@ async fn serve() -> Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8080);
-    let seerr = Config::load(&Config::path()).ok().and_then(|config| {
+    let seerr = effective_config(&store).ok().and_then(|config| {
         config
             .sources
             .into_iter()
@@ -195,11 +219,19 @@ async fn serve() -> Result<()> {
         .route("/healthz", get(|| async { "ok" }))
         .route("/daily.xml", get(serve_feed))
         .route("/add", get(add_media))
-        .with_state(seerr);
+        .route("/admin/config", get(admin_get_config).put(admin_put_config))
+        .route("/admin/run", post(admin_run))
+        .route("/admin/preview", get(admin_preview))
+        .with_state(AppState { seerr });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     info!(port, "serving the paper");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct AppState {
+    seerr: Option<String>,
 }
 
 async fn serve_feed() -> Response {
@@ -221,11 +253,8 @@ struct AddParams {
 
 // GET mutates on purpose: the feed only offers plain anchors, and this is a
 // LAN-only service nothing crawls
-async fn add_media(
-    State(seerr_url): State<Option<String>>,
-    Query(params): Query<AddParams>,
-) -> Response {
-    let Some(url) = seerr_url else {
+async fn add_media(State(state): State<AppState>, Query(params): Query<AddParams>) -> Response {
+    let Some(url) = state.seerr else {
         return (StatusCode::NOT_FOUND, "no seerr source configured").into_response();
     };
     let Ok(key) = env::var("SEERR_API_KEY") else {
@@ -281,4 +310,190 @@ async fn sleep_until_next_run() {
     let wait = (next - now).to_std().unwrap_or(Duration::from_secs(3600));
     info!(seconds = wait.as_secs(), "sleeping until the next run");
     tokio::time::sleep(wait).await;
+}
+
+fn admin_guard(headers: &HeaderMap) -> Response {
+    let Ok(expected) = env::var("PAPERS_ADMIN_TOKEN") else {
+        return (StatusCode::NOT_FOUND, "admin api is disabled").into_response();
+    };
+    if expected.is_empty() {
+        return (StatusCode::NOT_FOUND, "admin api is disabled").into_response();
+    }
+    let ok = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| {
+            // constant-time: the token gates live ranking edits
+            subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), token.as_bytes()).into()
+        });
+    if ok {
+        StatusCode::OK.into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, "bearer token required").into_response()
+    }
+}
+
+async fn admin_get_config(State(_seerr): State<AppState>, headers: HeaderMap) -> Response {
+    let guard = admin_guard(&headers);
+    if !guard.status().is_success() {
+        return guard;
+    }
+    let store = match Store::open(&db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match store.load_config() {
+        Ok(Some(sources)) => {
+            let updated = store.config_updated_at().ok().flatten();
+            let body = serde_json::json!({ "sources": sources, "updated_at": updated });
+            (
+                [(header::CONTENT_TYPE, "application/json")],
+                body.to_string(),
+            )
+                .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no config stored yet").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn admin_put_config(
+    State(_seerr): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let guard = admin_guard(&headers);
+    if !guard.status().is_success() {
+        return guard;
+    }
+    if let Err(error) = Config::parse(&body) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
+    let store = match Store::open(&db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match store.save_config(&body) {
+        Ok(()) => (StatusCode::OK, "saved; takes effect on the next run").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+async fn admin_run(headers: HeaderMap) -> Response {
+    let guard = admin_guard(&headers);
+    if !guard.status().is_success() {
+        return guard;
+    }
+    tokio::spawn(async {
+        if let Err(error) = run(true).await {
+            warn!(%error, "admin-triggered run failed");
+        }
+    });
+    (StatusCode::ACCEPTED, "run started").into_response()
+}
+
+async fn admin_preview(State(_seerr): State<AppState>, headers: HeaderMap) -> Response {
+    let guard = admin_guard(&headers);
+    if !guard.status().is_success() {
+        return guard;
+    }
+    let store = match Store::open(&db_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let config = match effective_config(&store) {
+        Ok(config) => config,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let candidates = match store.unseen(200) {
+        Ok(unseen) => rank::prefilter(unseen, &config.rank),
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    if candidates.is_empty() {
+        return (
+            [(header::CONTENT_TYPE, "application/json")],
+            "{\"items\":[]}".to_string(),
+        )
+            .into_response();
+    }
+    let http = match http_client() {
+        Ok(http) => http,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let prompt = config
+        .rank
+        .prompt
+        .clone()
+        .unwrap_or_else(|| rank::DEFAULT_PROMPT.to_string());
+    let verdicts = match score_with_model(&http, &prompt, &candidates).await {
+        Ok(verdicts) => verdicts,
+        Err(error) => return (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+    };
+    let by_id: HashMap<i64, &store::Item> = candidates.iter().map(|item| (item.id, item)).collect();
+    let mut rows: Vec<(String, i64, String)> = verdicts
+        .into_iter()
+        .filter_map(|verdict| {
+            by_id
+                .get(&verdict.id)
+                .map(|item| (item.title.clone(), verdict.score, verdict.reason.clone()))
+        })
+        .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.1));
+    let body = serde_json::json!({ "items": rows
+        .iter()
+        .map(|(title, score, reason)| serde_json::json!({
+            "title": title,
+            "score": score,
+            "reason": reason,
+        }))
+        .collect::<Vec<_>>() });
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn admin_guard_accepts_only_matching_bearer() {
+        // only this test touches PAPERS_ADMIN_TOKEN, so the raw set/remove is
+        // race-free here despite the unsafe marker on env mutation
+        unsafe {
+            env::set_var("PAPERS_ADMIN_TOKEN", "secret-token-123");
+        }
+        let mut headers = HeaderMap::new();
+        assert_eq!(admin_guard(&headers).status(), StatusCode::UNAUTHORIZED);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong"),
+        );
+        assert_eq!(admin_guard(&headers).status(), StatusCode::UNAUTHORIZED);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token-123"),
+        );
+        assert_eq!(admin_guard(&headers).status(), StatusCode::OK);
+        unsafe {
+            env::remove_var("PAPERS_ADMIN_TOKEN");
+        }
+        assert_eq!(admin_guard(&headers).status(), StatusCode::NOT_FOUND);
+    }
 }
