@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.0...v0.3.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* serve feeds on a valid axum route, build the router in a test ([#27](https://github.com/trash-panda-v91-beta/papers/issues/27)) ([8fbc401](https://github.com/trash-panda-v91-beta/papers/commit/8fbc401a576ade5f0ac4f811354e4e3306036976))
+
 ## [0.3.0](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.2...v0.3.0) (2026-10-24)
 
 
