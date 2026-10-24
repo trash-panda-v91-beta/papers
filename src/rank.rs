@@ -159,7 +159,6 @@ mod tests {
             summary: summary.into(),
             weight: 5,
             reason: None,
-            feed: "news".into(),
             extra: String::new(),
         }
     }

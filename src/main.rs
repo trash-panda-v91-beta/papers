@@ -95,9 +95,6 @@ async fn run(use_model: bool) -> Result<()> {
 
     let candidates = rank::prefilter(store.unseen(200)?, &config.rank);
     info!(fetched = added, candidates = candidates.len(), "collected");
-    if candidates.is_empty() {
-        return Ok(());
-    }
 
     // seerr picks are not news; the reading scorer would fail them every time
     let seerr_names: Vec<&str> = config
@@ -132,26 +129,28 @@ async fn run(use_model: bool) -> Result<()> {
     }
     score_by_weight(&media, &store, "trending pick")?;
 
-    let top = store.top(config.keep_per_day)?;
-    if top.is_empty() {
+    let day = Local::now().format("%Y-%m-%d").to_string();
+    // each feed gets its own keep_per_day so media picks never lose their
+    // slots to better-scoring news
+    let mut shown_ids: Vec<i64> = Vec::new();
+    let mut printed = 0usize;
+    for feed in store.pending_feeds()? {
+        let top = store.top(&feed, config.keep_per_day)?;
+        if top.is_empty() {
+            continue;
+        }
+        let (title, body) = render::paper_entry(&day, &feed, &top);
+        store.save_digest(&day, &feed, &title, &body)?;
+        shown_ids.extend(top.iter().map(|item| item.id));
+        printed += 1;
+    }
+    if shown_ids.is_empty() {
         info!("nothing cleared the bar today");
         return Ok(());
     }
-    let day = Local::now().format("%Y-%m-%d").to_string();
-    // one digest per feed so news and media get their own files
-    let mut by_feed: HashMap<String, Vec<Item>> = HashMap::new();
-    for item in top {
-        by_feed.entry(item.feed.clone()).or_default().push(item);
-    }
-    let mut shown_ids: Vec<i64> = Vec::new();
-    for (feed, items) in &by_feed {
-        let (title, body) = render::paper_entry(&day, feed, items);
-        store.save_digest(&day, feed, &title, &body)?;
-        shown_ids.extend(items.iter().map(|item| item.id));
-    }
     store.mark_shown(&shown_ids)?;
     write_feed(&store)?;
-    info!(day = %day, feeds = by_feed.len(), kept = shown_ids.len(), "paper printed");
+    info!(day = %day, feeds = printed, kept = shown_ids.len(), "paper printed");
     Ok(())
 }
 
