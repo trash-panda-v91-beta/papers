@@ -227,14 +227,7 @@ async fn serve() -> Result<()> {
                 _ => None,
             })
     });
-    let app = Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .route("/{feed}.xml", get(serve_feed))
-        .route("/add", get(add_media))
-        .route("/admin/config", get(admin_get_config).put(admin_put_config))
-        .route("/admin/run", post(admin_run))
-        .route("/admin/preview", get(admin_preview))
-        .with_state(AppState { seerr });
+    let app = app(AppState { seerr });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     info!(port, "serving the paper");
     axum::serve(listener, app).await?;
@@ -246,11 +239,24 @@ struct AppState {
     seerr: Option<String>,
 }
 
+fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/{feed}", get(serve_feed))
+        .route("/add", get(add_media))
+        .route("/admin/config", get(admin_get_config).put(admin_put_config))
+        .route("/admin/run", post(admin_run))
+        .route("/admin/preview", get(admin_preview))
+        .with_state(state)
+}
+
 async fn serve_feed(Path(feed): Path<String>) -> Response {
     // the feed name comes from the URL - only clean names reach the filesystem
-    if !feed.ends_with(".xml")
-        || !feed
-            .trim_end_matches(".xml")
+    let Some(name) = feed.strip_suffix(".xml") else {
+        return (StatusCode::NOT_FOUND, "no such feed").into_response();
+    };
+    if name.is_empty()
+        || !name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
@@ -492,6 +498,43 @@ async fn admin_preview(State(_seerr): State<AppState>, headers: HeaderMap) -> Re
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[tokio::test]
+    async fn router_builds_and_serves_feeds() {
+        // the /{feed} route syntax panicked at startup once; build the real
+        // router and hit it so route mistakes fail here, not in the cluster
+        let dir = std::env::temp_dir().join(format!("papers-route-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // only this test touches PAPERS_OUT, so the raw set_var is race-free here
+        unsafe {
+            std::env::set_var("PAPERS_OUT", dir.to_str().unwrap());
+        }
+        std::fs::write(dir.join("news.xml"), "<feed/>\
+        ").unwrap();
+
+        let app = app(AppState { seerr: None });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+        let client = reqwest::Client::new();
+        let ok = client.get(format!("http://{addr}/healthz")).send().await.unwrap();
+        assert_eq!(ok.status(), 200);
+        assert_eq!(ok.text().await.unwrap(), "ok");
+
+        let feed = client.get(format!("http://{addr}/news.xml")).send().await.unwrap();
+        assert_eq!(feed.status(), 200);
+        assert_eq!(feed.text().await.unwrap(), "<feed/>");
+
+        let missing = client.get(format!("http://{addr}/nope.xml")).send().await.unwrap();
+        assert_eq!(missing.status(), 404);
+        let ugly = client.get(format!("http://{addr}/../etc.xml")).send().await.unwrap();
+        assert_eq!(ugly.status(), 404);
+        let admin = client.get(format!("http://{addr}/admin/config")).send().await.unwrap();
+        assert_eq!(admin.status(), 404, "admin is dark without a token");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn admin_guard_accepts_only_matching_bearer() {
