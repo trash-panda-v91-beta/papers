@@ -4,13 +4,9 @@ use crate::store::Item;
 
 pub const FEED_TITLE: &str = "papers";
 
-pub fn atom(
-    feed_id: &str,
-    feed_url: &str,
-    digests: &[(String, String, String)],
-    updated: DateTime<Utc>,
-) -> String {
-    let mut out = String::with_capacity(4096);
+/// one atom entry per article - readers see every item on its own
+pub fn atom(feed_id: &str, feed_url: &str, items: &[Item], updated: DateTime<Utc>) -> String {
+    let mut out = String::with_capacity(8192);
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     out.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">\n");
     out.push_str(&format!("  <title>{FEED_TITLE} - {feed_id}</title>\n"));
@@ -18,21 +14,25 @@ pub fn atom(
     out.push_str(&format!("  <link href=\"{feed_url}\" rel=\"self\"/>\n"));
     out.push_str("  <author><name>papers</name></author>\n");
     out.push_str(&format!("  <updated>{}</updated>\n", stamp(updated)));
-    for (day, title, body) in digests {
+    for item in items {
+        let reason = item.reason.as_deref().unwrap_or("");
         out.push_str("  <entry>\n");
-        out.push_str(&format!("    <title>{}</title>\n", escape(title)));
-        out.push_str(&format!("    <id>tag:papers,{day}:daily</id>\n"));
+        out.push_str(&format!("    <title>{}</title>\n", escape(&item.title)));
         out.push_str(&format!(
-            "    <updated>{}T06:00:00Z</updated>\n",
-            escape(day)
+            "    <id>tag:papers,2026:{feed_id}:{}</id>\n",
+            item.id
         ));
         out.push_str(&format!(
-            "    <link href=\"{feed_url}#{day}\" rel=\"alternate\"/>\n"
+            "    <updated>{}</updated>\n",
+            stamp(item.shown_at)
+        ));
+        out.push_str(&format!(
+            "    <link href=\"{}\" rel=\"alternate\"/>\n",
+            escape(&item.link)
         ));
         out.push_str(&format!(
             "    <content type=\"html\">{}</content>\n",
-            // the digest body is already escaped html from paper_entry
-            body
+            entry_body(item, reason)
         ));
         out.push_str("  </entry>\n");
     }
@@ -40,26 +40,21 @@ pub fn atom(
     out
 }
 
-pub fn paper_entry(day: &str, feed: &str, items: &[Item]) -> (String, String) {
-    let title = match feed {
-        "news" => format!("{day} - {} worth reading", items.len()),
-        "media" => format!("{day} - {} to watch", items.len()),
-        other => format!("{day} - {} {other} picks", items.len()),
-    };
-    let mut body = String::from("<ul>");
-    for item in items {
-        let reason = item.reason.as_deref().unwrap_or("");
-        body.push_str(&format!(
-            "<li><a href=\"{}\">{}</a> {} <em>{}</em> <small>{}</small></li>",
-            escape(&item.link),
-            escape(&item.title),
-            item.extra,
-            escape(reason),
-            escape(&item.source)
-        ));
+/// per-article body: summary, scoring reason, and source-specific anchors
+fn entry_body(item: &Item, reason: &str) -> String {
+    let mut body = String::new();
+    if !item.summary.is_empty() {
+        body.push_str(&format!("<p>{}</p>", escape(&item.summary)));
     }
-    body.push_str("</ul>");
-    (title, body)
+    if !item.extra.is_empty() {
+        body.push_str(&format!("<p>{}</p>", item.extra));
+    }
+    body.push_str(&format!(
+        "<p><em>{}</em> <small>{}</small></p>",
+        escape(reason),
+        escape(&item.source)
+    ));
+    body
 }
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -84,20 +79,20 @@ mod tests {
             source: "lwn".into(),
             title: title.into(),
             link: "https://lwn.net/1?a=1&b=2".into(),
-            summary: String::new(),
+            summary: "a summary".into(),
             weight: 5,
             reason: Some("kernel change".into()),
             extra: String::new(),
+            shown_at: Utc::now(),
         }
     }
 
     #[test]
-    fn renders_valid_atom_that_parses_back() {
-        let (title, body) = paper_entry("2026-10-20", "news", &[item("Rust 2.0 & friends")]);
+    fn renders_one_entry_per_article_that_parses_back() {
         let xml = atom(
             "news",
             "https://papers.example/news.xml",
-            &[("2026-10-20".to_string(), title, body)],
+            &[item("Rust 2.0 & friends"), item("Second post")],
             Utc::now(),
         );
         let feed = feed_rs::parser::parse(xml.as_bytes()).expect("atom must parse");
@@ -105,9 +100,18 @@ mod tests {
             feed.title.map(|t| t.content).as_deref(),
             Some("papers - news")
         );
-        assert_eq!(feed.entries.len(), 1);
+        assert_eq!(feed.entries.len(), 2, "each article is its own entry");
+
         let entry = &feed.entries[0];
-        assert!(entry.title.as_ref().unwrap().content.contains("2026-10-20"));
+        assert_eq!(entry.title.as_ref().unwrap().content, "Rust 2.0 & friends");
+        assert!(
+            xml.contains("tag:papers,2026:news:1"),
+            "entry ids are stable per item"
+        );
+        assert!(
+            xml.contains("a=1&amp;b=2"),
+            "href ampersand must be xml-escaped in the raw feed: {xml}"
+        );
         let content = entry
             .content
             .as_ref()
@@ -115,11 +119,8 @@ mod tests {
             .body
             .as_deref()
             .unwrap_or_default();
-        assert!(
-            xml.contains("a=1&amp;b=2"),
-            "href ampersand must be xml-escaped in the raw feed: {xml}"
-        );
-        assert!(content.contains("Rust 2.0 &amp; friends"));
+        assert!(content.contains("a summary"), "summary in the body");
+        assert!(content.contains("kernel change"), "reason in the body");
     }
 
     #[test]
@@ -128,8 +129,13 @@ mod tests {
         with_extra.extra =
             "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
                 .into();
-        let (_, body) = paper_entry("2026-10-20", "news", &[with_extra]);
-        assert!(body.contains(
+        let xml = atom(
+            "media",
+            "https://papers.example/media.xml",
+            &[with_extra],
+            Utc::now(),
+        );
+        assert!(xml.contains(
             "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
         ));
     }

@@ -29,6 +29,15 @@ pub struct Item {
     pub weight: i64,
     pub reason: Option<String>,
     pub extra: String,
+    /// when the item was published to a feed; defaults to epoch if unshown
+    pub shown_at: DateTime<Utc>,
+}
+
+impl Item {
+    pub fn with_shown_at(mut self, at: DateTime<Utc>) -> Self {
+        self.shown_at = at;
+        self
+    }
 }
 
 impl Store {
@@ -50,14 +59,6 @@ impl Store {
                  shown integer not null default 0,
                  extra text not null default ''
              );
-             create table if not exists digests (
-                 day text not null,
-                 feed text not null default 'news',
-                 title text not null,
-                 body text not null,
-                 created_at text not null,
-                 primary key (day, feed)
-             );
              create table if not exists config (
                  id integer primary key check (id = 1),
                  sources text not null,
@@ -70,8 +71,8 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// older databases: items without a feed column, digests keyed by day
-    /// only - widen them in place, carrying existing rows into the news feed
+    /// older databases: items without feed/extra/shown_at columns - widen
+    /// them in place, carrying existing rows into the news feed
     fn migrate(conn: &Connection) -> Result<()> {
         let has_column = |table: &str, column: &str| -> Result<bool> {
             let mut stmt = conn.prepare(&format!("pragma table_info({table})"))?;
@@ -83,6 +84,9 @@ impl Store {
             }
             Ok(false)
         };
+        if !has_column("items", "shown_at")? {
+            conn.execute_batch("alter table items add column shown_at text;")?;
+        }
         if !has_column("items", "extra")? {
             conn.execute_batch("alter table items add column extra text not null default '';")?;
         }
@@ -90,24 +94,6 @@ impl Store {
             conn.execute_batch(
                 "alter table items add column feed text not null default 'news';
                  update items set feed = 'news';",
-            )?;
-        }
-        if !has_column("digests", "feed")? {
-            conn.execute_batch(
-                "begin;
-                 create table digests_new (
-                     day text not null,
-                     feed text not null default 'news',
-                     title text not null,
-                     body text not null,
-                     created_at text not null,
-                     primary key (day, feed)
-                 );
-                 insert or ignore into digests_new
-                     select day, 'news', title, body, created_at from digests;
-                 drop table digests;
-                 alter table digests_new rename to digests;
-                 commit;",
             )?;
         }
         Ok(())
@@ -186,6 +172,7 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                shown_at: Utc::now(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -224,45 +211,65 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                shown_at: Utc::now(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn mark_shown(&self, ids: &[i64]) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
         for id in ids {
-            self.conn
-                .execute("update items set shown = 1 where id = ?1", params![id])?;
+            self.conn.execute(
+                "update items set shown = 1, shown_at = ?1 where id = ?2",
+                params![now, id],
+            )?;
         }
         Ok(())
     }
 
-    pub fn save_digest(&self, day: &str, feed: &str, title: &str, body: &str) -> Result<()> {
-        self.conn.execute(
-            "insert into digests (day, feed, title, body, created_at)
-             values (?1, ?2, ?3, ?4, ?5)
-             on conflict(day, feed) do update set title = excluded.title,
-                 body = excluded.body",
-            params![day, feed, title, body, Utc::now().to_rfc3339()],
+    /// published items for a feed, newest first - one atom entry per item
+    pub fn feed_entries(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
+        let mut stmt = self.conn.prepare(
+            "select id, source, title, link, summary, weight, reason, extra,
+                    coalesce(shown_at, fetched_at) as stamp
+             from items where shown = 1 and feed = ?1
+             order by stamp desc limit ?2",
         )?;
-        Ok(())
+        let rows = stmt.query_map(params![feed, keep as i64], |row| {
+            Ok((
+                Item {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    title: row.get(2)?,
+                    link: row.get(3)?,
+                    summary: row.get(4)?,
+                    weight: row.get(5)?,
+                    reason: row.get(6)?,
+                    extra: row.get(7)?,
+                    shown_at: Utc::now(),
+                },
+                row.get::<_, String>(8)?,
+            ))
+        })?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(item, stamp)| {
+                item.with_shown_at(
+                    DateTime::parse_from_rfc3339(&stamp)
+                        .map(|t| t.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                )
+            })
+            .collect())
     }
 
     pub fn feeds(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("select distinct feed from digests order by feed")?;
+            .prepare("select distinct feed from items where shown = 1 order by feed")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    pub fn digests(&self, feed: &str, keep: usize) -> Result<Vec<(String, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "select day, title, body from digests where feed = ?1 order by day desc limit ?2",
-        )?;
-        let rows = stmt.query_map(params![feed, keep as i64], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -312,32 +319,24 @@ mod tests {
             store.top("news", 10).unwrap().is_empty(),
             "shown items drop out"
         );
-
-        store
-            .save_digest("2026-10-20", "news", "day", "<p>hi</p>")
-            .unwrap();
-        assert_eq!(store.digests("news", 5).unwrap().len(), 1);
     }
 
     #[test]
-    fn digests_partition_by_feed() {
+    fn feed_entries_come_from_shown_items_per_feed() {
         let store = Store::open(":memory:").unwrap();
-        store
-            .save_digest("2026-10-20", "news", "n", "<p>n</p>")
-            .unwrap();
-        store
-            .save_digest("2026-10-20", "media", "m", "<p>m</p>")
-            .unwrap();
-        store
-            .save_digest("2026-10-21", "news", "n2", "<p>n2</p>")
-            .unwrap();
-        assert_eq!(store.feeds().unwrap(), vec!["media", "news"]);
-        assert_eq!(store.digests("news", 30).unwrap().len(), 2);
-        assert_eq!(store.digests("media", 30).unwrap().len(), 1);
+        assert!(store.insert(&item("https://a/1")).unwrap());
+        assert!(store.insert(&item("https://a/2")).unwrap());
+        let unseen = store.unseen(10).unwrap();
+        store.set_score(unseen[0].id, 9, "good").unwrap();
+        store.mark_shown(&[unseen[0].id]).unwrap();
+
+        assert_eq!(store.feeds().unwrap(), vec!["news"]);
+        let entries = store.feed_entries("news", 30).unwrap();
+        assert_eq!(entries.len(), 1, "only published items are feed entries");
     }
 
     #[test]
-    fn migration_carries_old_digests_into_news() {
+    fn migration_carries_old_schema_into_news_feed() {
         // build a v0.2-style database by hand, then let Store::open migrate it
         let path = std::env::temp_dir().join(format!("papers-mig-test-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -357,23 +356,13 @@ mod tests {
                  reason text,
                  shown integer not null default 0
              );
-             create table digests (
-                 day text primary key,
-                 title text not null,
-                 body text not null,
-                 created_at text not null
-             );
              insert into items (url_hash, source, title, link, fetched_at, weight)
-                 values ('h', 'lwn', 't', 'https://a/1', '2026-10-20', 5);
-             insert into digests values ('2026-10-20', 'day', '<p>old</p>', '2026-10-20');
-             insert into digests values ('2026-10-21', 'day2', '<p>old2</p>', '2026-10-21');",
+                 values ('h', 'lwn', 't', 'https://a/1', '2026-10-20', 5);",
         )
         .unwrap();
         drop(conn);
 
         let store = Store::open(path.to_str().unwrap()).unwrap();
-        assert_eq!(store.feeds().unwrap(), vec!["news"]);
-        assert_eq!(store.digests("news", 30).unwrap().len(), 2);
         // migrated rows survive and new links still dedupe
         assert_eq!(store.unseen(10).unwrap().len(), 1);
         assert!(store.insert(&item("https://a/2")).unwrap());

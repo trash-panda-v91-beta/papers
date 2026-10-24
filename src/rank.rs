@@ -160,6 +160,7 @@ mod tests {
             weight: 5,
             reason: None,
             extra: String::new(),
+            shown_at: chrono::Utc::now(),
         }
     }
 
