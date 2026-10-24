@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.2...v0.3.3) (2026-10-24)
+
+
+### Features
+
+* one atom entry per article instead of a daily digest blob ([#32](https://github.com/trash-panda-v91-beta/papers/issues/32)) ([da9cc1e](https://github.com/trash-panda-v91-beta/papers/commit/da9cc1e9ad5d913060abe4445869f04796230e70))
+
 ## [0.3.2](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.1...v0.3.2) (2026-10-24)
 
 
