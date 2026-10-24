@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.4...v0.3.5) (2026-10-24)
+
+
+### Bug Fixes
+
+* **docker:** copy assets into the builder so the icon embeds ([#36](https://github.com/trash-panda-v91-beta/papers/issues/36)) ([8b20965](https://github.com/trash-panda-v91-beta/papers/commit/8b209653dda8faafb7fc682cefc77dd699615d0b))
+
 ## [0.3.4](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.3...v0.3.4) (2026-10-24)
 
 
