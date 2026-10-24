@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Rank;
 use crate::store::Item;
 
-const PROMPT: &str = "You filter a personal news feed for a homelab and infrastructure engineer. \
+pub const DEFAULT_PROMPT: &str = "You filter a personal news feed for a homelab and infrastructure engineer. \
 Given items as JSON, score each 0 to 10 for whether it is worth reading: \
 score high for self-hosting, Kubernetes, Rust, networking, storage, hardware, and practical \
 tutorials; score low for AI hype, funding news, listicles, and opinion pieces without substance. \
@@ -84,6 +84,7 @@ pub async fn score(
     base_url: &str,
     model: &str,
     key: &str,
+    prompt: &str,
     items: &[Item],
 ) -> Result<Vec<Verdict>> {
     if items.is_empty() {
@@ -107,7 +108,7 @@ pub async fn score(
         messages: vec![
             Message {
                 role: "system",
-                content: PROMPT.to_string(),
+                content: prompt.to_string(),
             },
             Message {
                 role: "user",
@@ -167,6 +168,7 @@ mod tests {
         let rank = Rank {
             exclude: vec!["giveaway".into()],
             require_any: vec!["kubernetes".into()],
+            prompt: None,
         };
         let kept = prefilter(
             vec![
@@ -185,6 +187,7 @@ mod tests {
         let rank = Rank {
             exclude: vec!["hype".into()],
             require_any: vec![],
+            prompt: None,
         };
         let kept = prefilter(vec![item("AI hype", ""), item("Wireguard mesh", "")], &rank);
         assert_eq!(kept.len(), 1);

@@ -18,6 +18,9 @@ pub struct Rank {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub require_any: Vec<String>,
+    /// overrides the built-in scoring prompt; editable live via /admin/config
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,14 +62,18 @@ fn default_weight() -> i64 {
 }
 
 impl Config {
-    pub fn load(path: &Path) -> Result<Self> {
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("reading config {}", path.display()))?;
-        let config: Config = toml::from_str(&raw).context("parsing sources config")?;
+    pub fn parse(raw: &str) -> Result<Self> {
+        let config: Config = toml::from_str(raw).context("parsing sources config")?;
         if config.sources.is_empty() {
             anyhow::bail!("config has no sources");
         }
         Ok(config)
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("reading config {}", path.display()))?;
+        Self::parse(&raw)
     }
 
     pub fn path() -> PathBuf {
@@ -121,5 +128,18 @@ url = "http://seerr:80"
             config.sources[2].kind,
             SourceKind::Seerr { ref url } if url == "http://seerr:80"
         ));
+    }
+
+    #[test]
+    fn parses_rank_prompt_override() {
+        let config = Config::parse(
+            "[rank]\nprompt = \"score for cats\"\n\n[[sources]]\nname = \"hn\"\nkind = \"feed\"\nurl = \"https://x\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.rank.prompt.as_deref(), Some("score for cats"));
+        let config =
+            Config::parse("[[sources]]\nname = \"hn\"\nkind = \"feed\"\nurl = \"https://x\"\n")
+                .unwrap();
+        assert_eq!(config.rank.prompt, None);
     }
 }

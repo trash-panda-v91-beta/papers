@@ -54,9 +54,47 @@ impl Store {
                  title text not null,
                  body text not null,
                  created_at text not null
+             );
+             create table if not exists config (
+                 id integer primary key check (id = 1),
+                 sources text not null,
+                 updated_at text not null
              );",
         )?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .context("setting busy timeout")?;
         Ok(Self { conn })
+    }
+
+    /// live config overrides the seeded file; stored once and then owned by
+    /// the admin API, so git only ever provides the bootstrap
+    pub fn load_config(&self) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("select sources from config where id = 1")?;
+        let mut rows = stmt.query([])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn save_config(&self, sources: &str) -> Result<()> {
+        self.conn.execute(
+            "insert into config (id, sources, updated_at) values (1, ?1, ?2)
+             on conflict(id) do update set sources = excluded.sources,
+                 updated_at = excluded.updated_at",
+            params![sources, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn config_updated_at(&self) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("select updated_at from config where id = 1")?;
+        let mut rows = stmt.query([])?;
+        Ok(rows.next()?.map(|row| row.get(0).unwrap_or_default()))
     }
 
     pub fn insert(&self, item: &NewItem) -> Result<bool> {
@@ -215,5 +253,16 @@ mod tests {
         new.extra = "<a href=\"https://x\">trailer</a>".into();
         store.insert(&new).unwrap();
         assert_eq!(store.unseen(10).unwrap()[0].extra, new.extra);
+    }
+
+    #[test]
+    fn live_config_seeds_once_then_overrides() {
+        let store = Store::open(":memory:").unwrap();
+        assert!(store.load_config().unwrap().is_none());
+        store.save_config("keep_per_day = 3").unwrap();
+        assert_eq!(store.load_config().unwrap().unwrap(), "keep_per_day = 3");
+        assert!(store.config_updated_at().unwrap().is_some());
+        store.save_config("keep_per_day = 5").unwrap();
+        assert_eq!(store.load_config().unwrap().unwrap(), "keep_per_day = 5");
     }
 }
