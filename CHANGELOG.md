@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.1...v0.2.2) (2026-10-24)
+
+
+### Features
+
+* **deps:** update hk ( 2.7.1 ➔ 2.8.0 ) ([#21](https://github.com/trash-panda-v91-beta/papers/issues/21)) ([67ff72c](https://github.com/trash-panda-v91-beta/papers/commit/67ff72c8a628c846e29e3bb34db6f849da9413b8))
+* live ranking config with a token-guarded admin api ([#23](https://github.com/trash-panda-v91-beta/papers/issues/23)) ([e59bb7b](https://github.com/trash-panda-v91-beta/papers/commit/e59bb7bc0c13d90493b62c7642aa0fa66b9b8e96))
+
 ## [0.2.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.0...v0.2.1) (2026-10-23)
 
 
