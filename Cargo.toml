@@ -12,7 +12,7 @@ chrono = { version = "0.4", features = ["serde"] }
 feed-rs = "3"
 reqwest = { version = "0.13", default-features = false, features = ["gzip", "json", "rustls"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
-scraper = "0.27"
+scraper = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
