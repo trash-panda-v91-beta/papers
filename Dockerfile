@@ -5,6 +5,7 @@ RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static ca-cer
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY assets ./assets
 
 RUN cargo build --release
 
