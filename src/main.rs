@@ -509,28 +509,56 @@ mod tests {
         unsafe {
             std::env::set_var("PAPERS_OUT", dir.to_str().unwrap());
         }
-        std::fs::write(dir.join("news.xml"), "<feed/>\
-        ").unwrap();
+        std::fs::write(
+            dir.join("news.xml"),
+            "<feed/>\
+        ",
+        )
+        .unwrap();
 
         let app = app(AppState { seerr: None });
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
         let client = reqwest::Client::new();
-        let ok = client.get(format!("http://{addr}/healthz")).send().await.unwrap();
+        let ok = client
+            .get(format!("http://{addr}/healthz"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.text().await.unwrap(), "ok");
 
-        let feed = client.get(format!("http://{addr}/news.xml")).send().await.unwrap();
+        let feed = client
+            .get(format!("http://{addr}/news.xml"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(feed.status(), 200);
         assert_eq!(feed.text().await.unwrap(), "<feed/>");
 
-        let missing = client.get(format!("http://{addr}/nope.xml")).send().await.unwrap();
+        let missing = client
+            .get(format!("http://{addr}/nope.xml"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(missing.status(), 404);
-        let ugly = client.get(format!("http://{addr}/../etc.xml")).send().await.unwrap();
+        let ugly = client
+            .get(format!("http://{addr}/../etc.xml"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(ugly.status(), 404);
-        let admin = client.get(format!("http://{addr}/admin/config")).send().await.unwrap();
+        let admin = client
+            .get(format!("http://{addr}/admin/config"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(admin.status(), 404, "admin is dark without a token");
 
         std::fs::remove_dir_all(&dir).unwrap();
