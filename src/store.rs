@@ -29,7 +29,6 @@ pub struct Item {
     pub weight: i64,
     pub reason: Option<String>,
     pub extra: String,
-    pub feed: String,
 }
 
 impl Store {
@@ -173,7 +172,7 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra, feed
+            "select id, source, title, link, summary, weight, reason, extra
              from items where shown = 0 and score is null
              order by weight desc, fetched_at desc limit ?1",
         )?;
@@ -187,7 +186,6 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
-                feed: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -201,13 +199,22 @@ impl Store {
         Ok(())
     }
 
-    pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
+    /// feeds that have scored, unpublished items waiting for a digest
+    pub fn pending_feeds(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra, feed
-             from items where shown = 0 and score >= 5
-             order by score desc, weight desc, fetched_at desc limit ?1",
+            "select distinct feed from items where shown = 0 and score >= 5 order by feed",
         )?;
-        let rows = stmt.query_map([keep as i64], |row| {
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn top(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
+        let mut stmt = self.conn.prepare(
+            "select id, source, title, link, summary, weight, reason, extra
+             from items where shown = 0 and score >= 5 and feed = ?1
+             order by score desc, weight desc, fetched_at desc limit ?2",
+        )?;
+        let rows = stmt.query_map(params![feed, keep as i64], |row| {
             Ok(Item {
                 id: row.get(0)?,
                 source: row.get(1)?,
@@ -217,7 +224,6 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
-                feed: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -292,17 +298,20 @@ mod tests {
 
         store.set_score(unseen[0].id, 3, "meh").unwrap();
         assert!(
-            store.top(10).unwrap().is_empty(),
+            store.top("news", 10).unwrap().is_empty(),
             "score below 5 is not shown"
         );
 
         assert!(store.insert(&item("https://a/2")).unwrap());
         let next = store.unseen(10).unwrap();
         store.set_score(next[0].id, 9, "good").unwrap();
-        let top = store.top(10).unwrap();
+        let top = store.top("news", 10).unwrap();
         assert_eq!(top.len(), 1);
         store.mark_shown(&[top[0].id]).unwrap();
-        assert!(store.top(10).unwrap().is_empty(), "shown items drop out");
+        assert!(
+            store.top("news", 10).unwrap().is_empty(),
+            "shown items drop out"
+        );
 
         store
             .save_digest("2026-10-20", "news", "day", "<p>hi</p>")
@@ -365,8 +374,8 @@ mod tests {
         let store = Store::open(path.to_str().unwrap()).unwrap();
         assert_eq!(store.feeds().unwrap(), vec!["news"]);
         assert_eq!(store.digests("news", 30).unwrap().len(), 2);
-        // migrated items show up in the news feed, and new links still dedupe
-        assert_eq!(store.unseen(10).unwrap()[0].feed, "news");
+        // migrated rows survive and new links still dedupe
+        assert_eq!(store.unseen(10).unwrap().len(), 1);
         assert!(store.insert(&item("https://a/2")).unwrap());
         assert_eq!(store.unseen(10).unwrap().len(), 2);
         let _ = std::fs::remove_file(&path);

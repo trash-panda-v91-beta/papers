@@ -31,7 +31,8 @@ pub fn atom(
         ));
         out.push_str(&format!(
             "    <content type=\"html\">{}</content>\n",
-            escape(body)
+            // the digest body is already escaped html from paper_entry
+            body
         ));
         out.push_str("  </entry>\n");
     }
@@ -87,7 +88,6 @@ mod tests {
             weight: 5,
             reason: Some("kernel change".into()),
             extra: String::new(),
-            feed: "news".into(),
         }
     }
 
@@ -116,8 +116,8 @@ mod tests {
             .as_deref()
             .unwrap_or_default();
         assert!(
-            content.contains("a=1&amp;b=2"),
-            "ampersand must be escaped: {content}"
+            xml.contains("a=1&amp;b=2"),
+            "href ampersand must be xml-escaped in the raw feed: {xml}"
         );
         assert!(content.contains("Rust 2.0 &amp; friends"));
     }

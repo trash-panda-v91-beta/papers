@@ -95,9 +95,6 @@ async fn run(use_model: bool) -> Result<()> {
 
     let candidates = rank::prefilter(store.unseen(200)?, &config.rank);
     info!(fetched = added, candidates = candidates.len(), "collected");
-    if candidates.is_empty() {
-        return Ok(());
-    }
 
     // seerr picks are not news; the reading scorer would fail them every time
     let seerr_names: Vec<&str> = config
@@ -132,26 +129,28 @@ async fn run(use_model: bool) -> Result<()> {
     }
     score_by_weight(&media, &store, "trending pick")?;
 
-    let top = store.top(config.keep_per_day)?;
-    if top.is_empty() {
+    let day = Local::now().format("%Y-%m-%d").to_string();
+    // each feed gets its own keep_per_day so media picks never lose their
+    // slots to better-scoring news
+    let mut shown_ids: Vec<i64> = Vec::new();
+    let mut printed = 0usize;
+    for feed in store.pending_feeds()? {
+        let top = store.top(&feed, config.keep_per_day)?;
+        if top.is_empty() {
+            continue;
+        }
+        let (title, body) = render::paper_entry(&day, &feed, &top);
+        store.save_digest(&day, &feed, &title, &body)?;
+        shown_ids.extend(top.iter().map(|item| item.id));
+        printed += 1;
+    }
+    if shown_ids.is_empty() {
         info!("nothing cleared the bar today");
         return Ok(());
     }
-    let day = Local::now().format("%Y-%m-%d").to_string();
-    // one digest per feed so news and media get their own files
-    let mut by_feed: HashMap<String, Vec<Item>> = HashMap::new();
-    for item in top {
-        by_feed.entry(item.feed.clone()).or_default().push(item);
-    }
-    let mut shown_ids: Vec<i64> = Vec::new();
-    for (feed, items) in &by_feed {
-        let (title, body) = render::paper_entry(&day, feed, items);
-        store.save_digest(&day, feed, &title, &body)?;
-        shown_ids.extend(items.iter().map(|item| item.id));
-    }
     store.mark_shown(&shown_ids)?;
     write_feed(&store)?;
-    info!(day = %day, feeds = by_feed.len(), kept = shown_ids.len(), "paper printed");
+    info!(day = %day, feeds = printed, kept = shown_ids.len(), "paper printed");
     Ok(())
 }
 
@@ -495,12 +494,16 @@ async fn admin_preview(State(_seerr): State<AppState>, headers: HeaderMap) -> Re
 }
 
 #[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
     #[tokio::test]
     async fn router_builds_and_serves_feeds() {
+        let _env = ENV_LOCK.lock().unwrap();
         // the /{feed} route syntax panicked at startup once; build the real
         // router and hit it so route mistakes fail here, not in the cluster
         let dir = std::env::temp_dir().join(format!("papers-route-test-{}", std::process::id()));
@@ -587,5 +590,128 @@ mod tests {
             env::remove_var("PAPERS_ADMIN_TOKEN");
         }
         assert_eq!(admin_guard(&headers).status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[cfg(test)]
+mod e2e {
+    use super::*;
+    use axum::Json;
+    use axum::routing::{get as get_route, post as post_route};
+
+    /// boots stub feed + seerr + litellm servers, runs the real pipeline
+    /// against a temp db, and asserts the observable feed files
+    #[tokio::test]
+    async fn pipeline_publishes_per_feed_with_stub_servers() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("papers-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        unsafe {
+            env::set_var("PAPERS_DB", dir.join("papers.db").to_str().unwrap());
+            env::set_var("PAPERS_OUT", dir.join("out").to_str().unwrap());
+            env::set_var("SEERR_API_KEY", "stub-key");
+            env::remove_var("PAPERS_LLM_MODEL");
+        }
+
+        // stub news feed: three articles
+        let rss = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+            <item><title>News A</title><link>https://stub.test/a</link></item>
+            <item><title>News B</title><link>https://stub.test/b</link></item>
+            <item><title>News C</title><link>https://stub.test/c</link></item>
+        </channel></rss>"#;
+        let feed_app = Router::new().route(
+            "/rss",
+            get_route(move || async {
+                (
+                    [(header::CONTENT_TYPE, "application/rss+xml")],
+                    rss.to_string(),
+                )
+            }),
+        );
+        let feed_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let feed_addr = feed_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(feed_listener, feed_app).await.unwrap();
+        });
+
+        // stub seerr: trending with one movie, detail with a youtube trailer
+        let trending = serde_json::json!({
+            "results": [{
+                "id": 42, "mediaType": "movie", "title": "Stub Movie (2026)",
+                "overview": "a stub", "releaseDate": "2026-01-01"
+            }]
+        });
+        let detail = serde_json::json!({
+            "relatedVideos": [{"key": "stubtrailer", "type": "Trailer", "site": "YouTube"}]
+        });
+        let seerr_app = Router::new()
+            .route(
+                "/api/v1/discover/trending",
+                get_route(move || async move { Json(trending.clone()) }),
+            )
+            .route(
+                "/api/v1/movie/42",
+                get_route(move || async move { Json(detail.clone()) }),
+            );
+        let seerr_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let seerr_addr = seerr_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(seerr_listener, seerr_app).await.unwrap();
+        });
+
+        // stub litellm: score every news item 9 - higher than any media weight
+        let llm_app = Router::new().route(
+            "/chat/completions",
+            post_route(|| async {
+                Json(serde_json::json!({
+                    "choices": [{"message": {"content": r#"{"items":[
+                            {"id": 1, "score": 9, "reason": "stub"},
+                            {"id": 2, "score": 9, "reason": "stub"},
+                            {"id": 3, "score": 9, "reason": "stub"}
+                        ]}"#}}]
+                }))
+            }),
+        );
+        let llm_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let llm_addr = llm_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(llm_listener, llm_app).await.unwrap();
+        });
+
+        // live config pointing at the stubs
+        let store = Store::open(&db_path()).unwrap();
+        let config = format!(
+            "keep_per_day = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\nweight = 5\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nfeed = \"media\"\nweight = 7\n"
+        );
+        store.save_config(&config).unwrap();
+
+        run(true).await.unwrap();
+
+        // media feed exists even though every news item out-scored it, and
+        // the media item carries its trailer and add anchors
+        let news = std::fs::read_to_string(dir.join("out/news.xml")).unwrap();
+        assert!(news.contains("News A"), "news feed publishes scored items");
+        let media = std::fs::read_to_string(dir.join("out/media.xml")).unwrap();
+        assert!(
+            media.contains("Stub Movie (2026)"),
+            "media feed keeps its slots: {media}"
+        );
+        assert!(media.contains("youtube.com/watch?v=stubtrailer"));
+        std::fs::write("/tmp/papers-e2e-media.xml", &media).unwrap();
+        assert!(media.contains("/add?media=42&amp;media_type=movie"));
+
+        // second run with nothing new: feeds stay, nothing republishes
+        run(true).await.unwrap();
+        let media_again = std::fs::read_to_string(dir.join("out/media.xml")).unwrap();
+        assert_eq!(media, media_again);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
