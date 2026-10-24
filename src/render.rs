@@ -87,7 +87,6 @@ mod tests {
             weight: 5,
             reason: Some("kernel change".into()),
             extra: String::new(),
-            feed: "news".into(),
         }
     }
 
