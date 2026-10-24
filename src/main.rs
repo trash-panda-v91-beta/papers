@@ -14,7 +14,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use chrono::{Local, TimeDelta, Utc};
+use chrono::{Local, TimeDelta};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -129,9 +129,8 @@ async fn run(use_model: bool) -> Result<()> {
     }
     score_by_weight(&media, &store, "trending pick")?;
 
-    let day = Local::now().format("%Y-%m-%d").to_string();
     // each feed gets its own keep_per_day so media picks never lose their
-    // slots to better-scoring news
+    // slots to better-scoring news; shown items become individual feed entries
     let mut shown_ids: Vec<i64> = Vec::new();
     let mut printed = 0usize;
     for feed in store.pending_feeds()? {
@@ -139,8 +138,6 @@ async fn run(use_model: bool) -> Result<()> {
         if top.is_empty() {
             continue;
         }
-        let (title, body) = render::paper_entry(&day, &feed, &top);
-        store.save_digest(&day, &feed, &title, &body)?;
         shown_ids.extend(top.iter().map(|item| item.id));
         printed += 1;
     }
@@ -150,7 +147,7 @@ async fn run(use_model: bool) -> Result<()> {
     }
     store.mark_shown(&shown_ids)?;
     write_feed(&store)?;
-    info!(day = %day, feeds = printed, kept = shown_ids.len(), "paper printed");
+    info!(feeds = printed, kept = shown_ids.len(), "paper printed");
     Ok(())
 }
 
@@ -194,7 +191,12 @@ fn write_feed(store: &Store) -> Result<()> {
     let base = fetch::public_base();
     for feed in store.feeds()? {
         let url = format!("{base}/{feed}.xml");
-        let xml = render::atom(&feed, &url, &store.digests(&feed, 30)?, Utc::now());
+        let entries = store.feed_entries(&feed, 100)?;
+        if entries.is_empty() {
+            continue;
+        }
+        let updated = entries[0].shown_at;
+        let xml = render::atom(&feed, &url, &entries, updated);
         std::fs::write(format!("{dir}/{feed}.xml"), xml)
             .with_context(|| format!("writing {dir}/{feed}.xml"))?;
     }
@@ -666,7 +668,7 @@ mod e2e {
 
         // stub litellm: score every news item 9 - higher than any media weight
         let llm_app = Router::new().route(
-            "/chat/completions",
+            "/v1/chat/completions",
             post_route(|| async {
                 Json(serde_json::json!({
                     "choices": [{"message": {"content": r#"{"items":[
@@ -681,6 +683,9 @@ mod e2e {
             .await
             .unwrap();
         let llm_addr = llm_listener.local_addr().unwrap();
+        unsafe {
+            env::set_var("PAPERS_LLM_URL", format!("http://{llm_addr}/v1"));
+        }
         tokio::spawn(async move {
             axum::serve(llm_listener, llm_app).await.unwrap();
         });
@@ -698,13 +703,16 @@ mod e2e {
         // the media item carries its trailer and add anchors
         let news = std::fs::read_to_string(dir.join("out/news.xml")).unwrap();
         assert!(news.contains("News A"), "news feed publishes scored items");
+        assert!(
+            news.contains("<em>stub</em>"),
+            "news items were scored by the stub LLM, not the weight fallback"
+        );
         let media = std::fs::read_to_string(dir.join("out/media.xml")).unwrap();
         assert!(
             media.contains("Stub Movie (2026)"),
             "media feed keeps its slots: {media}"
         );
         assert!(media.contains("youtube.com/watch?v=stubtrailer"));
-        std::fs::write("/tmp/papers-e2e-media.xml", &media).unwrap();
         assert!(media.contains("/add?media=42&amp;media_type=movie"));
 
         // second run with nothing new: feeds stay, nothing republishes

@@ -22,9 +22,9 @@ mise run test     # cargo test, unit tests live inside each module
 - `src/fetch.rs` - pulls one source into normalized items, resolves relative links
 - `src/store.rs` - SQLite: `items` deduped by link hash, `digests` one row per day
 - `src/rank.rs` - keyword prefilter, then model scoring over the survivors
-- `src/render.rs` - Atom rendering, 30 days of entries per feed; sources pick
-  their feed file with `feed = "media"` (default `news`), served at
-  `/{feed}.xml`
+- `src/render.rs` - Atom rendering, one entry per article, last 100 shown
+  items per feed; sources pick their feed file with `feed = "media"`
+  (default `news`), served at `/{feed}.xml`
 - `src/main.rs` - subcommands `run`, `serve`, `sources`, plus the in process scheduler
 
 Each module carries its own `#[cfg(test)]` block; there is no separate integration suite.
