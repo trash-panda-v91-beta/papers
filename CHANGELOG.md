@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.1...v0.3.2) (2026-10-24)
+
+
+### Bug Fixes
+
+* publish per-feed keep_per_day so media keeps its slots ([#30](https://github.com/trash-panda-v91-beta/papers/issues/30)) ([7feff00](https://github.com/trash-panda-v91-beta/papers/commit/7feff001a23cfef97740ab45a10fc59e719f477b))
+
 ## [0.3.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.0...v0.3.1) (2026-10-24)
 
 
