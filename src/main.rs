@@ -82,6 +82,7 @@ async fn run(use_model: bool) -> Result<()> {
                         published: item.published,
                         weight: source.weight,
                         extra: item.extra,
+                        image: item.image,
                         feed: source.feed.clone().unwrap_or_else(|| "news".into()),
                     };
                     if store.insert(&new_item)? {
@@ -243,12 +244,20 @@ struct AppState {
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/icon.png", get(icon))
         .route("/{feed}", get(serve_feed))
         .route("/add", get(add_media))
         .route("/admin/config", get(admin_get_config).put(admin_put_config))
         .route("/admin/run", post(admin_run))
         .route("/admin/preview", get(admin_preview))
         .with_state(state)
+}
+
+/// feed icon, referenced as <icon> and <logo> so readers show it next to the feed
+const ICON: &[u8] = include_bytes!("../assets/icon.png");
+
+async fn icon() -> Response {
+    ([(header::CONTENT_TYPE, "image/png")], ICON).into_response()
 }
 
 async fn serve_feed(Path(feed): Path<String>) -> Response {
@@ -565,6 +574,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(admin.status(), 404, "admin is dark without a token");
+
+        let icon = client
+            .get(format!("http://{addr}/icon.png"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(icon.status(), 200, "the feed icon must be reachable");
+        assert_eq!(
+            icon.headers().get("content-type").unwrap(),
+            "image/png",
+            "readers sniff the icon type"
+        );
+        assert_eq!(icon.bytes().await.unwrap().as_ref(), ICON);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

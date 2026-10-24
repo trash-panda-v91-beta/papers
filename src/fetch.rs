@@ -14,6 +14,7 @@ pub struct Fetched {
     pub summary: String,
     pub published: Option<DateTime<Utc>>,
     pub extra: String,
+    pub image: String,
 }
 
 const SUMMARY_LIMIT: usize = 400;
@@ -63,6 +64,8 @@ struct SeerrMedia {
     release_date: Option<String>,
     #[serde(rename = "firstAirDate")]
     first_air_date: Option<String>,
+    #[serde(rename = "posterPath")]
+    poster_path: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,6 +138,15 @@ fn seerr_item(media: &SeerrMedia, title: &str, trailer: Option<&str>, add_base: 
         summary: truncate(media.overview.as_deref().unwrap_or_default()),
         published: None,
         extra: anchors.join(" - "),
+        image: poster_url(media.poster_path.as_deref()),
+    }
+}
+
+/// tmdb serves posters by size prefix; w500 is the sweet spot for readers
+fn poster_url(path: Option<&str>) -> String {
+    match path {
+        Some(path) if !path.is_empty() => format!("https://image.tmdb.org/t/p/w500{path}"),
+        _ => String::new(),
     }
 }
 
@@ -176,6 +188,7 @@ async fn fetch_feed(client: &Client, url: &str) -> Result<Vec<Fetched>> {
         .into_iter()
         .filter_map(|entry| {
             let link = entry.links.first()?.href.clone();
+            let image = entry_image(&entry);
             Some(Fetched {
                 title: entry.title.map(|t| t.content).unwrap_or_default(),
                 link,
@@ -185,6 +198,7 @@ async fn fetch_feed(client: &Client, url: &str) -> Result<Vec<Fetched>> {
                     .unwrap_or_default(),
                 published: entry.published.or(entry.updated),
                 extra: String::new(),
+                image,
             })
         })
         .collect())
@@ -240,6 +254,7 @@ async fn fetch_html(
                 summary,
                 published: None,
                 extra: String::new(),
+                image: String::new(),
             })
         })
         .filter(|f| !f.title.is_empty())
@@ -248,6 +263,50 @@ async fn fetch_html(
 
 fn selector(raw: &str) -> Result<Selector> {
     Selector::parse(raw).map_err(|e| anyhow::anyhow!("bad selector {raw:?}: {e:?}"))
+}
+
+/// best available image for an entry: media thumbnail, image media content,
+/// image enclosure, then the first <img> in the entry html. Empty when none.
+fn entry_image(entry: &feed_rs::model::Entry) -> String {
+    for media in &entry.media {
+        if let Some(thumb) = media.thumbnails.first() {
+            return thumb.image.uri.clone();
+        }
+        if let Some(content) = media.content.iter().find(|c| {
+            c.content_type
+                .as_ref()
+                .is_some_and(|t| t.to_string().starts_with("image/"))
+        }) {
+            if let Some(url) = &content.url {
+                return url.to_string();
+            }
+        }
+    }
+    for link in &entry.links {
+        if link.rel.as_deref() == Some("enclosure")
+            && link
+                .media_type
+                .as_deref()
+                .is_some_and(|mime| mime.starts_with("image/"))
+        {
+            return link.href.clone();
+        }
+    }
+    let html = entry
+        .content
+        .as_ref()
+        .and_then(|c| c.body.clone())
+        .or_else(|| entry.summary.as_ref().map(|s| s.content.clone()));
+    html.as_deref().and_then(first_img_src).unwrap_or_default()
+}
+
+fn first_img_src(html: &str) -> Option<String> {
+    let doc = Html::parse_fragment(html);
+    let sel = Selector::parse("img").ok()?;
+    doc.select(&sel)
+        .next()
+        .and_then(|node| node.value().attr("src"))
+        .map(str::to_string)
 }
 
 fn truncate(text: &str) -> String {
@@ -295,6 +354,7 @@ mod tests {
             "overview": "space sequel",
             "releaseDate": date,
             "firstAirDate": date,
+            "posterPath": "/poster.jpg",
         }))
         .unwrap()
     }
@@ -348,5 +408,61 @@ mod tests {
             "https://www.youtube.com/watch?v=real1"
         );
         assert!(pick_trailer(&SeerrVideos::default()).is_none());
+    }
+
+    fn parsed_entry(xml: &str) -> feed_rs::model::Entry {
+        let feed = feed_rs::parser::parse(xml.as_bytes()).expect("feed parses");
+        feed.entries.into_iter().next().expect("one entry")
+    }
+
+    #[test]
+    fn seerr_poster_becomes_the_entry_image() {
+        let item = seerr_item(
+            &media("movie", "Dune", "2024-03-01"),
+            "Dune",
+            None,
+            "https://p",
+        );
+        assert_eq!(item.image, "https://image.tmdb.org/t/p/w500/poster.jpg");
+    }
+
+    #[test]
+    fn poster_url_is_empty_without_a_path() {
+        assert_eq!(poster_url(None), "");
+        assert_eq!(poster_url(Some("")), "");
+    }
+
+    #[test]
+    fn entry_image_prefers_media_content_over_inline_html() {
+        // feed-rs drops a lone media:thumbnail (its media object is only emitted
+        // when media:content is present), so media:content is the reliable hook
+        let entry = parsed_entry(
+            r#"<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>t</title>
+               <item><title>a</title><link>https://x/1</link>
+                 <media:group><media:content url="https://x/media.jpg" type="image/jpeg"/></media:group>
+                 <description>&lt;img src="https://x/inline.jpg"/&gt;</description>
+               </item></channel></rss>"#,
+        );
+        assert_eq!(entry_image(&entry), "https://x/media.jpg");
+    }
+
+    #[test]
+    fn entry_image_falls_back_to_an_inline_img() {
+        let entry = parsed_entry(
+            r#"<rss version="2.0"><channel><title>t</title>
+               <item><title>a</title><link>https://x/1</link>
+                 <description>&lt;img src="https://x/inline.jpg"/&gt; text</description>
+               </item></channel></rss>"#,
+        );
+        assert_eq!(entry_image(&entry), "https://x/inline.jpg");
+    }
+
+    #[test]
+    fn entry_without_images_yields_empty() {
+        let entry = parsed_entry(
+            r#"<rss version="2.0"><channel><title>t</title>
+               <item><title>a</title><link>https://x/1</link></item></channel></rss>"#,
+        );
+        assert_eq!(entry_image(&entry), "");
     }
 }

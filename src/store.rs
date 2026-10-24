@@ -16,6 +16,7 @@ pub struct NewItem {
     pub published: Option<DateTime<Utc>>,
     pub weight: i64,
     pub extra: String,
+    pub image: String,
     pub feed: String,
 }
 
@@ -29,6 +30,8 @@ pub struct Item {
     pub weight: i64,
     pub reason: Option<String>,
     pub extra: String,
+    /// poster or thumbnail url, empty when the source has none
+    pub image: String,
     /// when the item was published to a feed; defaults to epoch if unshown
     pub shown_at: DateTime<Utc>,
 }
@@ -57,7 +60,8 @@ impl Store {
                  score integer,
                  reason text,
                  shown integer not null default 0,
-                 extra text not null default ''
+                 extra text not null default '',
+                 image text not null default ''
              );
              create table if not exists config (
                  id integer primary key check (id = 1),
@@ -89,6 +93,9 @@ impl Store {
         }
         if !has_column("items", "extra")? {
             conn.execute_batch("alter table items add column extra text not null default '';")?;
+        }
+        if !has_column("items", "image")? {
+            conn.execute_batch("alter table items add column image text not null default '';")?;
         }
         if !has_column("items", "feed")? {
             conn.execute_batch(
@@ -138,8 +145,8 @@ impl Store {
             .collect::<String>();
         let changed = self.conn.execute(
             "insert or ignore into items
-                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, feed)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, feed, image)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 hash,
                 item.source,
@@ -151,6 +158,7 @@ impl Store {
                 item.weight,
                 item.extra,
                 item.feed,
+                item.image,
             ],
         )?;
         Ok(changed == 1)
@@ -158,7 +166,7 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra
+            "select id, source, title, link, summary, weight, reason, extra, image
              from items where shown = 0 and score is null
              order by weight desc, fetched_at desc limit ?1",
         )?;
@@ -172,6 +180,7 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                image: row.get(8)?,
                 shown_at: Utc::now(),
             })
         })?;
@@ -197,7 +206,7 @@ impl Store {
 
     pub fn top(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra
+            "select id, source, title, link, summary, weight, reason, extra, image
              from items where shown = 0 and score >= 5 and feed = ?1
              order by score desc, weight desc, fetched_at desc limit ?2",
         )?;
@@ -211,6 +220,7 @@ impl Store {
                 weight: row.get(5)?,
                 reason: row.get(6)?,
                 extra: row.get(7)?,
+                image: row.get(8)?,
                 shown_at: Utc::now(),
             })
         })?;
@@ -231,7 +241,7 @@ impl Store {
     /// published items for a feed, newest first - one atom entry per item
     pub fn feed_entries(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra,
+            "select id, source, title, link, summary, weight, reason, extra, image,
                     coalesce(shown_at, fetched_at) as stamp
              from items where shown = 1 and feed = ?1
              order by stamp desc limit ?2",
@@ -247,9 +257,10 @@ impl Store {
                     weight: row.get(5)?,
                     reason: row.get(6)?,
                     extra: row.get(7)?,
+                    image: row.get(8)?,
                     shown_at: Utc::now(),
                 },
-                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
             ))
         })?;
         Ok(rows
@@ -287,6 +298,7 @@ mod tests {
             published: None,
             weight: 5,
             extra: String::new(),
+            image: String::new(),
             feed: "news".into(),
         }
     }
