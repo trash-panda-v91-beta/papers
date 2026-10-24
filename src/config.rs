@@ -32,6 +32,9 @@ pub struct Source {
     pub weight: i64,
     #[serde(default)]
     pub max_per_fetch: Option<usize>,
+    /// which feed file this source publishes into (news.xml, media.xml, ...)
+    #[serde(default)]
+    pub feed: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -35,11 +35,14 @@ pub async fn fetch(client: &Client, source: &Source) -> Result<Vec<Fetched>> {
 }
 
 pub fn public_base() -> String {
-    // the feed URL doubles as the public base for the /add callback links
-    env::var("PAPERS_FEED_URL")
-        .unwrap_or_else(|_| "http://localhost:8080/daily.xml".into())
-        .trim_end_matches("/daily.xml")
-        .to_string()
+    // the feed URL doubles as the public base for feed files and /add links;
+    // accept a bare host or a legacy .../daily.xml value
+    let url =
+        env::var("PAPERS_FEED_URL").unwrap_or_else(|_| "http://localhost:8080/daily.xml".into());
+    match url.rsplit_once('/') {
+        Some((base, last)) if last.ends_with(".xml") => base.to_string(),
+        _ => url,
+    }
 }
 
 #[derive(Deserialize)]
