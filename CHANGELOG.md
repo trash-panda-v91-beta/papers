@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.3...v0.3.4) (2026-10-24)
+
+
+### Features
+
+* rich atom entries with posters, images and a feed icon ([#34](https://github.com/trash-panda-v91-beta/papers/issues/34)) ([28cf5ba](https://github.com/trash-panda-v91-beta/papers/commit/28cf5ba2b4bd808a3a2e867d84ad594b2fa0bdc9))
+
 ## [0.3.3](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.2...v0.3.3) (2026-10-24)
 
 
