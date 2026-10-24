@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.2...v0.3.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** Update scraper ( 0.27.0 ➔ 0.29.0 ) ([#26](https://github.com/trash-panda-v91-beta/papers/issues/26))
+
+### Features
+
+* **deps:** Update scraper ( 0.27.0 ➔ 0.29.0 ) ([#26](https://github.com/trash-panda-v91-beta/papers/issues/26)) ([46dfa57](https://github.com/trash-panda-v91-beta/papers/commit/46dfa570b7b6733a7a351b0faaf38d0edfd8bc6b))
+* one atom feed per source category instead of a single daily merge ([#24](https://github.com/trash-panda-v91-beta/papers/issues/24)) ([a54eea7](https://github.com/trash-panda-v91-beta/papers/commit/a54eea76bd61406ec881e6f307e6478cc0ee1183))
+
 ## [0.2.2](https://github.com/trash-panda-v91-beta/papers/compare/v0.2.1...v0.2.2) (2026-10-24)
 
 
