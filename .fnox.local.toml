@@ -1,7 +1,0 @@
-[secrets]
-HASS_TOKEN = { provider = "onepass", value = "op://NebularGrid/HASS MCP/password" }
-HASS_URL = { provider = "onepass", value = "op://NebularGrid/HASS MCP/url" }
-HOMEASSISTANT_TOKEN = { provider = "onepass", value = "op://NebularGrid/HASS MCP/password" }
-HOMEASSISTANT_URL = { provider = "onepass", value = "op://NebularGrid/HASS MCP/url" }
-TRUENAS_API_KEY = { provider = "onepass", value = "op://NebularGrid/ASC Nebular Grid API Key/credential" }
-BLA_OP_ST = { provider = "onepass", value = "op://NebularGrid/bla op service token/password" }
