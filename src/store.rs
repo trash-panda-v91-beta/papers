@@ -17,7 +17,6 @@ pub struct NewItem {
     pub weight: i64,
     pub extra: String,
     pub image: String,
-    pub feed: String,
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +144,8 @@ impl Store {
             .collect::<String>();
         let changed = self.conn.execute(
             "insert or ignore into items
-                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, feed, image)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, image)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 hash,
                 item.source,
@@ -157,7 +156,6 @@ impl Store {
                 Utc::now().to_rfc3339(),
                 item.weight,
                 item.extra,
-                item.feed,
                 item.image,
             ],
         )?;
@@ -195,22 +193,14 @@ impl Store {
         Ok(())
     }
 
-    /// feeds that have scored, unpublished items waiting for a digest
-    pub fn pending_feeds(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "select distinct feed from items where shown = 0 and score >= 5 order by feed",
-        )?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    pub fn top(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
+    /// scored, unpublished items waiting for the paper
+    pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
             "select id, source, title, link, summary, weight, reason, extra, image
-             from items where shown = 0 and score >= 5 and feed = ?1
-             order by score desc, weight desc, fetched_at desc limit ?2",
+             from items where shown = 0 and score >= 5
+             order by score desc, weight desc, fetched_at desc limit ?1",
         )?;
-        let rows = stmt.query_map(params![feed, keep as i64], |row| {
+        let rows = stmt.query_map([keep as i64], |row| {
             Ok(Item {
                 id: row.get(0)?,
                 source: row.get(1)?,
@@ -238,15 +228,15 @@ impl Store {
         Ok(())
     }
 
-    /// published items for a feed, newest first - one atom entry per item
-    pub fn feed_entries(&self, feed: &str, keep: usize) -> Result<Vec<Item>> {
+    /// published items, newest first - one atom entry per item
+    pub fn entries(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
             "select id, source, title, link, summary, weight, reason, extra, image,
                     coalesce(shown_at, fetched_at) as stamp
-             from items where shown = 1 and feed = ?1
-             order by stamp desc limit ?2",
+             from items where shown = 1
+             order by stamp desc limit ?1",
         )?;
-        let rows = stmt.query_map(params![feed, keep as i64], |row| {
+        let rows = stmt.query_map([keep as i64], |row| {
             Ok((
                 Item {
                     id: row.get(0)?,
@@ -275,14 +265,6 @@ impl Store {
             })
             .collect())
     }
-
-    pub fn feeds(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("select distinct feed from items where shown = 1 order by feed")?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
 }
 
 #[cfg(test)]
@@ -299,7 +281,6 @@ mod tests {
             weight: 5,
             extra: String::new(),
             image: String::new(),
-            feed: "news".into(),
         }
     }
 
@@ -317,33 +298,33 @@ mod tests {
 
         store.set_score(unseen[0].id, 3, "meh").unwrap();
         assert!(
-            store.top("news", 10).unwrap().is_empty(),
+            store.top(10).unwrap().is_empty(),
             "score below 5 is not shown"
         );
 
         assert!(store.insert(&item("https://a/2")).unwrap());
         let next = store.unseen(10).unwrap();
         store.set_score(next[0].id, 9, "good").unwrap();
-        let top = store.top("news", 10).unwrap();
+        let top = store.top(10).unwrap();
         assert_eq!(top.len(), 1);
         store.mark_shown(&[top[0].id]).unwrap();
-        assert!(
-            store.top("news", 10).unwrap().is_empty(),
-            "shown items drop out"
-        );
+        assert!(store.top(10).unwrap().is_empty(), "shown items drop out");
     }
 
     #[test]
-    fn feed_entries_come_from_shown_items_per_feed() {
+    fn entries_come_from_shown_items() {
         let store = Store::open(":memory:").unwrap();
         assert!(store.insert(&item("https://a/1")).unwrap());
         assert!(store.insert(&item("https://a/2")).unwrap());
         let unseen = store.unseen(10).unwrap();
         store.set_score(unseen[0].id, 9, "good").unwrap();
+        assert!(
+            store.top(10).unwrap().len() == 1,
+            "only the scored item is a candidate"
+        );
         store.mark_shown(&[unseen[0].id]).unwrap();
 
-        assert_eq!(store.feeds().unwrap(), vec!["news"]);
-        let entries = store.feed_entries("news", 30).unwrap();
+        let entries = store.entries(30).unwrap();
         assert_eq!(entries.len(), 1, "only published items are feed entries");
     }
 
@@ -395,10 +376,10 @@ mod tests {
     fn live_config_seeds_once_then_overrides() {
         let store = Store::open(":memory:").unwrap();
         assert!(store.load_config().unwrap().is_none());
-        store.save_config("keep_per_day = 3").unwrap();
-        assert_eq!(store.load_config().unwrap().unwrap(), "keep_per_day = 3");
+        store.save_config("max_per_run = 3").unwrap();
+        assert_eq!(store.load_config().unwrap().unwrap(), "max_per_run = 3");
         assert!(store.config_updated_at().unwrap().is_some());
-        store.save_config("keep_per_day = 5").unwrap();
-        assert_eq!(store.load_config().unwrap().unwrap(), "keep_per_day = 5");
+        store.save_config("max_per_run = 5").unwrap();
+        assert_eq!(store.load_config().unwrap().unwrap(), "max_per_run = 5");
     }
 }

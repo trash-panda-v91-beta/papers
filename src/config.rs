@@ -5,8 +5,9 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_keep")]
-    pub keep_per_day: usize,
+    /// items published per run, so a backlog cannot dump the whole pool at once
+    #[serde(default = "default_max_per_run")]
+    pub max_per_run: usize,
     #[serde(default)]
     pub rank: Rank,
     pub sources: Vec<Source>,
@@ -32,9 +33,9 @@ pub struct Source {
     pub weight: i64,
     #[serde(default)]
     pub max_per_fetch: Option<usize>,
-    /// which feed file this source publishes into (news.xml, media.xml, ...)
+    /// prefixes entry titles, e.g. "New in Seerr"
     #[serde(default)]
-    pub feed: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,8 +57,8 @@ pub enum SourceKind {
     },
 }
 
-fn default_keep() -> usize {
-    10
+fn default_max_per_run() -> usize {
+    8
 }
 
 fn default_weight() -> i64 {
@@ -92,7 +93,7 @@ mod tests {
     #[test]
     fn parses_all_source_kinds() {
         let raw = r#"
-keep_per_day = 8
+max_per_run = 8
 [rank]
 exclude = ["giveaway"]
 require_any = []
@@ -122,7 +123,7 @@ url = "http://seerr:80"
         std::fs::write(&path, raw).unwrap();
 
         let config = Config::load(&path).unwrap();
-        assert_eq!(config.keep_per_day, 8);
+        assert_eq!(config.max_per_run, 8);
         assert_eq!(config.sources.len(), 3);
         assert_eq!(config.sources[0].weight, 8);
         assert_eq!(config.sources[1].weight, default_weight());

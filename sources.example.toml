@@ -1,4 +1,4 @@
-keep_per_day = 10
+max_per_run = 8
 
 [rank]
 exclude = ["giveaway", "sponsored", "webinar", "crypto"]
@@ -34,13 +34,13 @@ summary = "p"
 weight = 5
 max_per_fetch = 10
 
-# Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment;
-# each item gets trailer and add links, the add one requests the title in Seerr.
-# feed = media publishes into media.xml instead of the default news.xml.
+# Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment.
+# Each item gets its poster, rating, an inline trailer and an add link that
+# requests the title in Seerr. label prefixes the entry title in the feed.
 [[sources]]
 name = "seerr-trending"
 kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
-feed = "media"
+label = "New in Seerr"
 weight = 7
 max_per_fetch = 10
