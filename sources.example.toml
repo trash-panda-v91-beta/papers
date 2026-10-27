@@ -3,27 +3,27 @@ max_per_run = 8
 max_age_days = 7
 
 [rank]
+# hard keyword filters, applied before the model sees anything
 exclude = ["giveaway", "sponsored", "webinar", "crypto"]
 require_any = []
+# 0 publishes everything; raise it as noise shows up
+min_score = 0
 
 [[sources]]
 name = "lwn"
 kind = "feed"
 url = "https://lwn.net/headlines/rss"
-weight = 8
 
 [[sources]]
 name = "hn"
 kind = "feed"
 url = "https://hnrss.org/frontpage"
-weight = 6
 max_per_fetch = 40
 
 [[sources]]
 name = "selfh-st"
 kind = "feed"
 url = "https://selfh.st/rss/"
-weight = 9
 
 [[sources]]
 name = "example-html"
@@ -33,7 +33,6 @@ item = "article"
 title = "h2"
 link = "a"
 summary = "p"
-weight = 5
 max_per_fetch = 10
 
 # Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment.
@@ -44,5 +43,4 @@ name = "seerr-trending"
 kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
 label = "New in Seerr"
-weight = 7
 max_per_fetch = 10

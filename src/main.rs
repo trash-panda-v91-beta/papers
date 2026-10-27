@@ -25,6 +25,8 @@ const DEFAULT_LLM_URL: &str = "http://litellm.ai.svc.cluster.local:4000/v1";
 const DEFAULT_LLM_MODEL: &str = "deepseek-v4.1-flash";
 /// atoms readers scroll through before the old ones fall out
 const FEED_ENTRIES: usize = 100;
+/// seerr trending is curated, so picks sort above anything the model scores
+const SEERR_SCORE: i64 = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
         Some("sources") => {
             let config = Config::load(&Config::path())?;
             for source in &config.sources {
-                println!("{} (weight {})", source.name, source.weight);
+                println!("{}", source.name);
             }
             Ok(())
         }
@@ -86,7 +88,6 @@ async fn run(use_model: bool) -> Result<()> {
                         link: item.link,
                         summary: item.summary,
                         published: item.published,
-                        weight: source.weight,
                         extra: item.extra,
                         image: item.image,
                     };
@@ -126,17 +127,22 @@ async fn run(use_model: bool) -> Result<()> {
                 }
             }
             Err(error) => {
-                warn!(%error, "model scoring failed, falling back to source weights");
-                score_by_weight(&news, &store, "rule score (model unavailable)")?;
+                warn!(%error, "model scoring failed, publishing unscored");
+                score_at_floor(
+                    &news,
+                    &store,
+                    config.rank.min_score,
+                    "rule score (model unavailable)",
+                )?;
             }
         }
     } else {
-        score_by_weight(&news, &store, "rule score")?;
+        score_at_floor(&news, &store, config.rank.min_score, "rule score")?;
     }
-    score_by_weight(&media, &store, "trending pick")?;
+    score_at_floor(&media, &store, SEERR_SCORE, "trending pick")?;
 
     // each run publishes what cleared the bar, but never the whole backlog at once
-    let top = store.top(config.max_per_run)?;
+    let top = store.top(config.max_per_run, config.rank.min_score)?;
     if top.is_empty() {
         info!("nothing cleared the bar in this run");
         return Ok(());
@@ -162,9 +168,9 @@ fn fresh(published: Option<DateTime<Utc>>, cutoff: DateTime<Utc>) -> bool {
     published.is_none_or(|published| published >= cutoff)
 }
 
-fn score_by_weight(items: &[Item], store: &Store, reason: &str) -> Result<()> {
+fn score_at_floor(items: &[Item], store: &Store, score: i64, reason: &str) -> Result<()> {
     for item in items {
-        store.set_score(item.id, item.weight, reason)?;
+        store.set_score(item.id, score, reason)?;
     }
     Ok(())
 }
@@ -689,7 +695,7 @@ mod e2e {
             axum::serve(seerr_listener, seerr_app).await.unwrap();
         });
 
-        // stub litellm: score every news item 9 - higher than any media weight
+        // stub litellm: score every news item 9, below the curated seerr pick
         let llm_app = Router::new().route(
             "/v1/chat/completions",
             post_route(|| async {
@@ -716,7 +722,7 @@ mod e2e {
         // live config pointing at the stubs
         let store = Store::open(&db_path()).unwrap();
         let config = format!(
-            "max_per_run = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\nweight = 5\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nlabel = \"New in Seerr\"\nweight = 7\n"
+            "max_per_run = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nlabel = \"New in Seerr\"\n"
         );
         store.save_config(&config).unwrap();
 

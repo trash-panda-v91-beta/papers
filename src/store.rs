@@ -14,7 +14,6 @@ pub struct NewItem {
     pub link: String,
     pub summary: String,
     pub published: Option<DateTime<Utc>>,
-    pub weight: i64,
     pub extra: String,
     pub image: String,
 }
@@ -26,7 +25,6 @@ pub struct Item {
     pub title: String,
     pub link: String,
     pub summary: String,
-    pub weight: i64,
     pub reason: Option<String>,
     pub extra: String,
     /// poster or thumbnail url, empty when the source has none
@@ -143,9 +141,11 @@ impl Store {
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
         let changed = self.conn.execute(
+            // `weight` is a leftover column from the source-weighted era; the
+            // model scores everything now, nothing reads it
             "insert or ignore into items
-                 (url_hash, source, title, link, summary, published, fetched_at, weight, extra, image)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 (url_hash, source, title, link, summary, published, fetched_at, extra, image, weight)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)",
             params![
                 hash,
                 item.source,
@@ -154,7 +154,6 @@ impl Store {
                 item.summary,
                 item.published.map(|d| d.to_rfc3339()),
                 Utc::now().to_rfc3339(),
-                item.weight,
                 item.extra,
                 item.image,
             ],
@@ -164,9 +163,9 @@ impl Store {
 
     pub fn unseen(&self, limit: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra, image
+            "select id, source, title, link, summary, reason, extra, image
              from items where shown = 0 and score is null
-             order by weight desc, published desc, fetched_at desc limit ?1",
+             order by published desc, fetched_at desc limit ?1",
         )?;
         let rows = stmt.query_map([limit as i64], |row| {
             Ok(Item {
@@ -175,10 +174,9 @@ impl Store {
                 title: row.get(2)?,
                 link: row.get(3)?,
                 summary: row.get(4)?,
-                weight: row.get(5)?,
-                reason: row.get(6)?,
-                extra: row.get(7)?,
-                image: row.get(8)?,
+                reason: row.get(5)?,
+                extra: row.get(6)?,
+                image: row.get(7)?,
                 shown_at: Utc::now(),
             })
         })?;
@@ -194,23 +192,22 @@ impl Store {
     }
 
     /// scored, unpublished items waiting for the paper
-    pub fn top(&self, keep: usize) -> Result<Vec<Item>> {
+    pub fn top(&self, keep: usize, min_score: i64) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra, image
-             from items where shown = 0 and score >= 5
-             order by score desc, weight desc, published desc, fetched_at desc limit ?1",
+            "select id, source, title, link, summary, reason, extra, image
+             from items where shown = 0 and score >= ?2
+             order by score desc, published desc, fetched_at desc limit ?1",
         )?;
-        let rows = stmt.query_map([keep as i64], |row| {
+        let rows = stmt.query_map(params![keep as i64, min_score], |row| {
             Ok(Item {
                 id: row.get(0)?,
                 source: row.get(1)?,
                 title: row.get(2)?,
                 link: row.get(3)?,
                 summary: row.get(4)?,
-                weight: row.get(5)?,
-                reason: row.get(6)?,
-                extra: row.get(7)?,
-                image: row.get(8)?,
+                reason: row.get(5)?,
+                extra: row.get(6)?,
+                image: row.get(7)?,
                 shown_at: Utc::now(),
             })
         })?;
@@ -231,7 +228,7 @@ impl Store {
     /// published items, newest first - one atom entry per item
     pub fn entries(&self, keep: usize) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(
-            "select id, source, title, link, summary, weight, reason, extra, image,
+            "select id, source, title, link, summary, reason, extra, image,
                     coalesce(shown_at, fetched_at) as stamp
              from items where shown = 1
              order by stamp desc limit ?1",
@@ -244,13 +241,12 @@ impl Store {
                     title: row.get(2)?,
                     link: row.get(3)?,
                     summary: row.get(4)?,
-                    weight: row.get(5)?,
-                    reason: row.get(6)?,
-                    extra: row.get(7)?,
-                    image: row.get(8)?,
+                    reason: row.get(5)?,
+                    extra: row.get(6)?,
+                    image: row.get(7)?,
                     shown_at: Utc::now(),
                 },
-                row.get::<_, String>(9)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
         Ok(rows
@@ -278,7 +274,6 @@ mod tests {
             link: link.into(),
             summary: String::new(),
             published: None,
-            weight: 5,
             extra: String::new(),
             image: String::new(),
         }
@@ -298,17 +293,17 @@ mod tests {
 
         store.set_score(unseen[0].id, 3, "meh").unwrap();
         assert!(
-            store.top(10).unwrap().is_empty(),
+            store.top(10, 5).unwrap().is_empty(),
             "score below 5 is not shown"
         );
 
         assert!(store.insert(&item("https://a/2")).unwrap());
         let next = store.unseen(10).unwrap();
         store.set_score(next[0].id, 9, "good").unwrap();
-        let top = store.top(10).unwrap();
+        let top = store.top(10, 5).unwrap();
         assert_eq!(top.len(), 1);
         store.mark_shown(&[top[0].id]).unwrap();
-        assert!(store.top(10).unwrap().is_empty(), "shown items drop out");
+        assert!(store.top(10, 5).unwrap().is_empty(), "shown items drop out");
     }
 
     #[test]
@@ -319,7 +314,7 @@ mod tests {
         let unseen = store.unseen(10).unwrap();
         store.set_score(unseen[0].id, 9, "good").unwrap();
         assert!(
-            store.top(10).unwrap().len() == 1,
+            store.top(10, 5).unwrap().len() == 1,
             "only the scored item is a candidate"
         );
         store.mark_shown(&[unseen[0].id]).unwrap();

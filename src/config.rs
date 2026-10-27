@@ -23,6 +23,10 @@ pub struct Rank {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub require_any: Vec<String>,
+    /// items scoring below this are dropped. 0 publishes everything, raise it
+    /// to tighten the paper as the noise shows up.
+    #[serde(default)]
+    pub min_score: i64,
     /// overrides the built-in scoring prompt; editable live via /admin/config
     #[serde(default)]
     pub prompt: Option<String>,
@@ -33,8 +37,6 @@ pub struct Source {
     pub name: String,
     #[serde(flatten)]
     pub kind: SourceKind,
-    #[serde(default = "default_weight")]
-    pub weight: i64,
     #[serde(default)]
     pub max_per_fetch: Option<usize>,
     /// prefixes entry titles, e.g. "New in Seerr"
@@ -67,10 +69,6 @@ fn default_max_per_run() -> usize {
 
 fn default_max_age_days() -> i64 {
     7
-}
-
-fn default_weight() -> i64 {
-    5
 }
 
 impl Config {
@@ -110,7 +108,6 @@ require_any = []
 name = "hn"
 kind = "feed"
 url = "https://hnrss.org/frontpage"
-weight = 8
 
 [[sources]]
 name = "lwn"
@@ -134,9 +131,11 @@ url = "http://seerr:80"
         assert_eq!(config.max_per_run, 8);
         assert_eq!(config.max_age_days, default_max_age_days());
         assert_eq!(config.sources.len(), 3);
-        assert_eq!(config.sources[0].weight, 8);
-        assert_eq!(config.sources[1].weight, default_weight());
         assert_eq!(config.rank.exclude, vec!["giveaway".to_string()]);
+        assert_eq!(
+            config.rank.min_score, 0,
+            "everything publishes until the bar is raised"
+        );
         assert!(matches!(
             config.sources[2].kind,
             SourceKind::Seerr { ref url } if url == "http://seerr:80"

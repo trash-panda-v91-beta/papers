@@ -108,7 +108,6 @@ mod tests {
             title: title.into(),
             link: "https://lwn.net/1?a=1&b=2".into(),
             summary: "a summary".into(),
-            weight: 5,
             reason: Some("kernel change".into()),
             extra: String::new(),
             image: String::new(),

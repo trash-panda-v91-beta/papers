@@ -12,13 +12,33 @@ subscribe to.
    Anything older than `max_age_days` is skipped, so a source's back catalogue never
    floods the feed
 2. `rank` drops excluded items by keyword, then asks the model to score the rest 0 to 10
-3. everything scoring 5 or more is published, up to `max_per_run` per run
+3. everything is published, up to `max_per_run` per run, best score first
 4. `serve` publishes the feed over HTTP and runs the job hourly in process
 
 Each article is its own entry with its image, summary, source extras (poster, rating, inline
 trailer) and the scoring reason, so a reader shows a stream of articles rather than a digest.
 
-A model outage is not fatal: scoring falls back to the per source weight and the paper still prints.
+A model outage is not fatal: everything is published unscored and the paper still prints.
+
+## Ranking
+
+Everything a source publishes lands in the feed. Ranking only decides the order and, if you ask
+for it, what to drop:
+
+```toml
+[rank]
+exclude = ["giveaway", "sponsored", "webinar"]
+require_any = []
+min_score = 0
+prompt = "..."
+```
+
+- `prompt` is the steering wheel: tell the model what you want more or less of. Live editable
+  through `POST /admin/config`, no deploy needed
+- `min_score` is the only gate. `0` publishes everything the model saw; raise it as noise shows up
+- `exclude` and `require_any` are hard keyword filters, applied before the model sees anything
+
+Seerr picks skip the model: they are curated trending, so they score at the top and always publish.
 
 ## Source kinds
 
@@ -27,7 +47,6 @@ A model outage is not fatal: scoring falls back to the per source weight and the
 name = "lwn"
 kind = "feed"
 url = "https://lwn.net/headlines/rss"
-weight = 8
 
 [[sources]]
 name = "example-blog"
@@ -37,7 +56,6 @@ item = "article"
 title = "h2"
 link = "a"
 summary = "p"
-weight = 5
 max_per_fetch = 10
 ```
 
@@ -49,7 +67,6 @@ name = "seerr-trending"
 kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
 label = "New in Seerr"
-weight = 7
 ```
 
 ## Configuration
@@ -70,7 +87,7 @@ weight = 7
 
 ```bash
 papers run              # fetch, rank, publish feed.xml
-papers run --no-llm     # same, scoring by source weight only
+papers run --no-llm     # same, no model call: everything publishes unscored
 papers serve            # publish /feed.xml and run the hourly job
 papers sources          # print the configured sources
 ```
