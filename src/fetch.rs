@@ -20,7 +20,7 @@ pub struct Fetched {
 const SUMMARY_LIMIT: usize = 400;
 
 pub async fn fetch(client: &Client, source: &Source) -> Result<Vec<Fetched>> {
-    let items = match &source.kind {
+    let mut items = match &source.kind {
         SourceKind::Feed { url } => fetch_feed(client, url).await?,
         SourceKind::Html {
             url,
@@ -31,19 +31,19 @@ pub async fn fetch(client: &Client, source: &Source) -> Result<Vec<Fetched>> {
         } => fetch_html(client, url, item, title, link, summary.as_deref()).await?,
         SourceKind::Seerr { url } => fetch_seerr(client, url).await?,
     };
+    if let Some(label) = &source.label {
+        for item in &mut items {
+            item.title = format!("{label}: {}", item.title);
+        }
+    }
     let cap = source.max_per_fetch.unwrap_or(usize::MAX);
     Ok(items.into_iter().take(cap).collect())
 }
 
-pub fn public_base() -> String {
-    // the feed URL doubles as the public base for feed files and /add links;
-    // accept a bare host or a legacy .../daily.xml value
-    let url =
-        env::var("PAPERS_FEED_URL").unwrap_or_else(|_| "http://localhost:8080/daily.xml".into());
-    match url.rsplit_once('/') {
-        Some((base, last)) if last.ends_with(".xml") => base.to_string(),
-        _ => url,
-    }
+/// public host the feed and its /add links are served from
+pub fn base_url() -> String {
+    let url = env::var("PAPERS_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".into());
+    url.trim_end_matches('/').to_string()
 }
 
 #[derive(Deserialize)]
@@ -66,6 +66,8 @@ struct SeerrMedia {
     first_air_date: Option<String>,
     #[serde(rename = "posterPath")]
     poster_path: Option<String>,
+    #[serde(rename = "voteAverage", default)]
+    vote_average: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -95,7 +97,7 @@ async fn fetch_seerr(client: &Client, url: &str) -> Result<Vec<Fetched>> {
         .json()
         .await
         .context("decoding seerr trending")?;
-    let add_base = public_base();
+    let add_base = base_url();
     let mut items = Vec::new();
     for media in trending.results {
         let title = media
@@ -124,11 +126,29 @@ fn seerr_item(media: &SeerrMedia, title: &str, trailer: Option<&str>, add_base: 
         "{add_base}/add?media={}&media_type={}",
         media.id, media.media_type
     );
+    let mut extra = String::new();
+    if let Some(rating) = media.vote_average.filter(|rating| *rating > 0.0) {
+        extra.push_str(&format!(
+            "<p>{rating:.1} / 10 - {}</p>\n",
+            escape(&media.media_type)
+        ));
+    }
+    // a youtube trailer plays inline in reeder; the plain link stays as the fallback
+    if let Some(key) = trailer {
+        extra.push_str(&format!(
+            "<p><iframe width=\"100%\" height=\"315\" \
+             src=\"https://www.youtube.com/embed/{key}\" frameborder=\"0\" \
+             allowfullscreen=\"true\"></iframe></p>\n"
+        ));
+    }
     let mut anchors = Vec::new();
-    if let Some(url) = trailer {
-        anchors.push(format!("<a href=\"{}\">trailer</a>", escape(url)));
+    if let Some(key) = trailer {
+        anchors.push(format!(
+            "<a href=\"https://www.youtube.com/watch?v={key}\">trailer</a>"
+        ));
     }
     anchors.push(format!("<a href=\"{}\">add</a>", escape(&add)));
+    extra.push_str(&format!("<p>{}</p>", anchors.join(" - ")));
     Fetched {
         title: format!("{title}{year}"),
         link: format!(
@@ -137,7 +157,7 @@ fn seerr_item(media: &SeerrMedia, title: &str, trailer: Option<&str>, add_base: 
         ),
         summary: truncate(media.overview.as_deref().unwrap_or_default()),
         published: None,
-        extra: anchors.join(" - "),
+        extra,
         image: poster_url(media.poster_path.as_deref()),
     }
 }
@@ -167,10 +187,7 @@ fn pick_trailer(videos: &SeerrVideos) -> Option<String> {
     let video = videos.related_videos.iter().find(|video| {
         video.site.as_deref() == Some("YouTube") && video.kind.as_deref() == Some("Trailer")
     })?;
-    Some(format!(
-        "https://www.youtube.com/watch?v={}",
-        video.key.as_deref()?
-    ))
+    video.key.clone()
 }
 
 async fn fetch_feed(client: &Client, url: &str) -> Result<Vec<Fetched>> {
@@ -194,7 +211,7 @@ async fn fetch_feed(client: &Client, url: &str) -> Result<Vec<Fetched>> {
                 link,
                 summary: entry
                     .summary
-                    .map(|s| truncate(&s.content))
+                    .map(|summary| truncate(&plain_text(&summary.content)))
                     .unwrap_or_default(),
                 published: entry.published.or(entry.updated),
                 extra: String::new(),
@@ -272,12 +289,13 @@ fn entry_image(entry: &feed_rs::model::Entry) -> String {
         if let Some(thumb) = media.thumbnails.first() {
             return thumb.image.uri.clone();
         }
-        if let Some(content) = media.content.iter().find(|c| {
-            c.content_type
+        for content in &media.content {
+            let Some(url) = &content.url else { continue };
+            let typed_image = content
+                .content_type
                 .as_ref()
-                .is_some_and(|t| t.to_string().starts_with("image/"))
-        }) {
-            if let Some(url) = &content.url {
+                .is_some_and(|kind| kind.to_string().starts_with("image/"));
+            if typed_image || looks_like_image(url.as_str()) {
                 return url.to_string();
             }
         }
@@ -287,7 +305,7 @@ fn entry_image(entry: &feed_rs::model::Entry) -> String {
             && link
                 .media_type
                 .as_deref()
-                .is_some_and(|mime| mime.starts_with("image/"))
+                .is_some_and(|mime| mime.starts_with("image/") || looks_like_image(&link.href))
         {
             return link.href.clone();
         }
@@ -300,6 +318,18 @@ fn entry_image(entry: &feed_rs::model::Entry) -> String {
     html.as_deref().and_then(first_img_src).unwrap_or_default()
 }
 
+/// media:content often carries no mime type, only a url
+fn looks_like_image(url: &str) -> bool {
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
+    [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+}
+
 fn first_img_src(html: &str) -> Option<String> {
     let doc = Html::parse_fragment(html);
     let sel = Selector::parse("img").ok()?;
@@ -307,6 +337,23 @@ fn first_img_src(html: &str) -> Option<String> {
         .next()
         .and_then(|node| node.value().attr("src"))
         .map(str::to_string)
+}
+
+/// summaries arrive as html, sometimes double-escaped by the publisher
+/// (`&amp;quot;` inside CDATA). Our own body escapes again, so normalise to
+/// plain text - two passes because one only unwraps one level.
+fn plain_text(markup: &str) -> String {
+    let once = text_nodes(markup);
+    let twice = text_nodes(&once);
+    twice.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn text_nodes(markup: &str) -> String {
+    Html::parse_fragment(markup)
+        .root_element()
+        .text()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn truncate(text: &str) -> String {
@@ -320,6 +367,21 @@ fn truncate(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_plain_text_strips_tags_and_decodes_entities() {
+        // feed-rs hands over xml-decoded text, so entities here are one level down
+        assert_eq!(
+            plain_text("&quot;responsible AI&quot; <b>now</b>"),
+            "\"responsible AI\" now"
+        );
+        // publishers that escape inside CDATA send two levels
+        assert_eq!(
+            plain_text("&amp;quot;responsible AI&amp;quot;"),
+            "\"responsible AI\""
+        );
+        assert_eq!(plain_text("plain words"), "plain words");
+    }
 
     #[test]
     fn truncate_collapses_whitespace_and_caps() {
@@ -364,17 +426,47 @@ mod tests {
         let item = seerr_item(
             &media("movie", "Dune: Part Two", "2024-03-01"),
             "Dune: Part Two",
-            Some("https://www.youtube.com/watch?v=abc"),
+            Some("abc"),
             "https://papers.internal",
         );
         assert_eq!(item.title, "Dune: Part Two (2024)");
         assert_eq!(item.link, "https://www.themoviedb.org/movie/693134");
         assert_eq!(item.summary, "space sequel");
-        assert_eq!(
-            item.extra,
-            "<a href=\"https://www.youtube.com/watch?v=abc\">trailer</a> - \
-             <a href=\"https://papers.internal/add?media=693134&amp;media_type=movie\">add</a>"
+        assert!(
+            item.extra.contains(
+                "<iframe width=\"100%\" height=\"315\" src=\"https://www.youtube.com/embed/abc\""
+            ),
+            "trailer plays inline: {}",
+            item.extra
         );
+        assert!(
+            item.extra
+                .contains("<a href=\"https://www.youtube.com/watch?v=abc\">trailer</a>")
+        );
+        assert!(item.extra.contains(
+            "<a href=\"https://papers.internal/add?media=693134&amp;media_type=movie\">add</a>"
+        ));
+        assert!(
+            !item.extra.contains("/ 10"),
+            "no rating line when the payload has no voteAverage"
+        );
+    }
+
+    #[test]
+    fn seerr_item_shows_the_rating() {
+        let mut rated = media("movie", "Dune", "2024-03-01");
+        rated.vote_average = Some(7.94);
+        let item = seerr_item(&rated, "Dune", None, "https://p");
+        assert!(
+            item.extra.contains("<p>7.9 / 10 - movie</p>"),
+            "{}",
+            item.extra
+        );
+
+        let mut unrated = media("movie", "Dune", "2024-03-01");
+        unrated.vote_average = Some(0.0);
+        let item = seerr_item(&unrated, "Dune", None, "https://p");
+        assert!(!item.extra.contains("/ 10"), "zero votes is not a rating");
     }
 
     #[test]
@@ -389,7 +481,7 @@ mod tests {
         assert_eq!(item.link, "https://www.themoviedb.org/tv/693134");
         assert_eq!(
             item.extra,
-            "<a href=\"https://papers.internal/add?media=693134&amp;media_type=tv\">add</a>"
+            "<p><a href=\"https://papers.internal/add?media=693134&amp;media_type=tv\">add</a></p>"
         );
     }
 
@@ -403,10 +495,7 @@ mod tests {
                ]}"#,
         )
         .unwrap();
-        assert_eq!(
-            pick_trailer(&videos).unwrap(),
-            "https://www.youtube.com/watch?v=real1"
-        );
+        assert_eq!(pick_trailer(&videos).as_deref(), Some("real1"));
         assert!(pick_trailer(&SeerrVideos::default()).is_none());
     }
 
@@ -444,6 +533,21 @@ mod tests {
                </item></channel></rss>"#,
         );
         assert_eq!(entry_image(&entry), "https://x/media.jpg");
+    }
+
+    #[test]
+    fn entry_image_accepts_untyped_media_content_by_extension() {
+        // selfh.st publishes media:content with only a url and medium="image"
+        let entry = parsed_entry(
+            r#"<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>t</title>
+               <item><title>a</title><link>https://x/1</link>
+                 <media:content url="https://x/featured-image.png?width=600" medium="image"/>
+               </item></channel></rss>"#,
+        );
+        assert_eq!(
+            entry_image(&entry),
+            "https://x/featured-image.png?width=600"
+        );
     }
 
     #[test]

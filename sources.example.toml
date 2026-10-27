@@ -1,27 +1,29 @@
-keep_per_day = 10
+max_per_run = 8
+# skip items older than this, so a source's archive never floods the feed (0 = no limit)
+max_age_days = 7
 
 [rank]
+# hard keyword filters, applied before the model sees anything
 exclude = ["giveaway", "sponsored", "webinar", "crypto"]
 require_any = []
+# 0 publishes everything; raise it as noise shows up
+min_score = 0
 
 [[sources]]
 name = "lwn"
 kind = "feed"
 url = "https://lwn.net/headlines/rss"
-weight = 8
 
 [[sources]]
 name = "hn"
 kind = "feed"
 url = "https://hnrss.org/frontpage"
-weight = 6
 max_per_fetch = 40
 
 [[sources]]
 name = "selfh-st"
 kind = "feed"
 url = "https://selfh.st/rss/"
-weight = 9
 
 [[sources]]
 name = "example-html"
@@ -31,16 +33,14 @@ item = "article"
 title = "h2"
 link = "a"
 summary = "p"
-weight = 5
 max_per_fetch = 10
 
-# Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment;
-# each item gets trailer and add links, the add one requests the title in Seerr.
-# feed = media publishes into media.xml instead of the default news.xml.
+# Trending movies and TV from Seerr. Needs SEERR_API_KEY in the environment.
+# Each item gets its poster, rating, an inline trailer and an add link that
+# requests the title in Seerr. label prefixes the entry title in the feed.
 [[sources]]
 name = "seerr-trending"
 kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
-feed = "media"
-weight = 7
+label = "New in Seerr"
 max_per_fetch = 10

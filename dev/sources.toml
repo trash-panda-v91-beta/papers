@@ -1,0 +1,21 @@
+max_per_run = 8
+max_age_days = 7
+
+[rank]
+exclude = ["giveaway", "sponsored", "webinar", "crypto"]
+
+[[sources]]
+name = "lwn"
+kind = "feed"
+url = "https://lwn.net/headlines/rss"
+
+[[sources]]
+name = "hn"
+kind = "feed"
+url = "https://hnrss.org/frontpage"
+max_per_fetch = 20
+
+[[sources]]
+name = "selfh-st"
+kind = "feed"
+url = "https://selfh.st/rss/"

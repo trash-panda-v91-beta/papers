@@ -5,15 +5,16 @@ use crate::store::Item;
 pub const FEED_TITLE: &str = "papers";
 pub const FEED_SUBTITLE: &str = "what is worth reading today";
 
-/// one atom entry per article - readers see every item on its own
-pub fn atom(feed_id: &str, feed_url: &str, items: &[Item], updated: DateTime<Utc>) -> String {
+/// one atom entry per article - readers see every item on its own.
+/// `content type="html"` must carry escaped markup: readers drop raw tags.
+pub fn atom(base: &str, items: &[Item], updated: DateTime<Utc>) -> String {
     let mut out = String::with_capacity(8192);
-    let base = feed_base(feed_url);
+    let feed_url = format!("{base}/feed.xml");
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-    out.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:media=\"http://search.yahoo.com/mrss/\">\n");
-    out.push_str(&format!("  <title>{FEED_TITLE} - {feed_id}</title>\n"));
+    out.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\">\n");
+    out.push_str(&format!("  <title>{FEED_TITLE}</title>\n"));
     out.push_str(&format!("  <subtitle>{FEED_SUBTITLE}</subtitle>\n"));
-    out.push_str(&format!("  <id>tag:papers,2026:{feed_id}</id>\n"));
+    out.push_str("  <id>tag:papers,2026:feed</id>\n");
     out.push_str(&format!("  <link href=\"{feed_url}\" rel=\"self\"/>\n"));
     out.push_str(&format!("  <link href=\"{base}\" rel=\"alternate\"/>\n"));
     out.push_str(&format!("  <icon>{base}/icon.png</icon>\n"));
@@ -27,26 +28,18 @@ pub fn atom(feed_id: &str, feed_url: &str, items: &[Item], updated: DateTime<Utc
         let reason = item.reason.as_deref().unwrap_or("");
         out.push_str("  <entry>\n");
         out.push_str(&format!("    <title>{}</title>\n", escape(&item.title)));
-        out.push_str(&format!(
-            "    <id>tag:papers,2026:{feed_id}:{}</id>\n",
-            item.id
-        ));
+        out.push_str(&format!("    <id>tag:papers,2026:{}</id>\n", item.id));
         out.push_str(&format!(
             "    <updated>{}</updated>\n",
             stamp(item.shown_at)
         ));
         out.push_str(&format!(
-            "    <link href=\"{}\" rel=\"alternate\"/>",
+            "    <link href=\"{}\" rel=\"alternate\"/>\n",
             escape(&item.link)
         ));
-        out.push('\n');
         if !item.image.is_empty() {
             out.push_str(&format!(
                 "    <link href=\"{}\" rel=\"enclosure\" type=\"image/jpeg\" length=\"0\"/>\n",
-                escape(&item.image)
-            ));
-            out.push_str(&format!(
-                "    <media:thumbnail url=\"{}\"/>\n",
                 escape(&item.image)
             ));
         }
@@ -60,7 +53,7 @@ pub fn atom(feed_id: &str, feed_url: &str, items: &[Item], updated: DateTime<Utc
         ));
         out.push_str(&format!(
             "    <content type=\"html\">{}</content>\n",
-            entry_body(item, reason)
+            escape(&entry_body(item, reason))
         ));
         out.push_str("  </entry>\n");
     }
@@ -68,34 +61,26 @@ pub fn atom(feed_id: &str, feed_url: &str, items: &[Item], updated: DateTime<Utc
     out
 }
 
-/// the feed file's directory doubles as the public base for the icon
-fn feed_base(feed_url: &str) -> String {
-    match feed_url.rsplit_once('/') {
-        Some((base, _)) => base.to_string(),
-        None => feed_url.to_string(),
-    }
-}
-
-/// per-article body: image, summary, scoring reason, and source-specific anchors
+/// per-article body: image, summary, source extras (trailers), scoring reason.
+/// Nothing here is escaped - `atom` escapes the whole body once, on the way out.
 fn entry_body(item: &Item, reason: &str) -> String {
     let mut body = String::new();
     if !item.image.is_empty() {
         body.push_str(&format!(
-            "<p><img src=\"{}\" alt=\"{}\"/></p>",
-            escape(&item.image),
-            escape(&item.title)
+            "<p><img src=\"{}\" alt=\"{}\"/></p>\n",
+            item.image, item.title
         ));
     }
     if !item.summary.is_empty() {
-        body.push_str(&format!("<p>{}</p>", escape(&item.summary)));
+        body.push_str(&format!("<p>{}</p>\n", item.summary));
     }
     if !item.extra.is_empty() {
-        body.push_str(&format!("<p>{}</p>", item.extra));
+        body.push_str(&item.extra);
+        body.push('\n');
     }
     body.push_str(&format!(
-        "<p><em>{}</em> <small>{}</small></p>",
-        escape(reason),
-        escape(&item.source)
+        "<p><em>{reason}</em> <small>{}</small></p>",
+        item.source
     ));
     body
 }
@@ -123,7 +108,6 @@ mod tests {
             title: title.into(),
             link: "https://lwn.net/1?a=1&b=2".into(),
             summary: "a summary".into(),
-            weight: 5,
             reason: Some("kernel change".into()),
             extra: String::new(),
             image: String::new(),
@@ -134,22 +118,18 @@ mod tests {
     #[test]
     fn renders_one_entry_per_article_that_parses_back() {
         let xml = atom(
-            "news",
-            "https://papers.example/news.xml",
+            "https://papers.example",
             &[item("Rust 2.0 & friends"), item("Second post")],
             Utc::now(),
         );
         let feed = feed_rs::parser::parse(xml.as_bytes()).expect("atom must parse");
-        assert_eq!(
-            feed.title.map(|t| t.content).as_deref(),
-            Some("papers - news")
-        );
+        assert_eq!(feed.title.map(|t| t.content).as_deref(), Some("papers"));
         assert_eq!(feed.entries.len(), 2, "each article is its own entry");
 
         let entry = &feed.entries[0];
         assert_eq!(entry.title.as_ref().unwrap().content, "Rust 2.0 & friends");
         assert!(
-            xml.contains("tag:papers,2026:news:1"),
+            xml.contains("tag:papers,2026:1"),
             "entry ids are stable per item"
         );
         assert!(
@@ -168,27 +148,47 @@ mod tests {
     }
 
     #[test]
+    fn content_markup_is_escaped_for_readers_that_drop_raw_tags() {
+        // reeder renders nothing for raw tags inside content type="html"
+        let xml = atom("https://papers.example", &[item("t")], Utc::now());
+        assert!(
+            xml.contains("&lt;p&gt;&lt;em&gt;kernel change&lt;/em&gt;"),
+            "body markup must be entity-escaped: {xml}"
+        );
+        assert!(
+            !xml.contains("<p><em>"),
+            "no raw tags inside content: {xml}"
+        );
+    }
+
+    #[test]
+    fn summary_quotes_are_escaped_once() {
+        // entry_body used to escape its parts before atom escaped the whole body,
+        // which readers rendered as a literal &quot;
+        let mut quoted = item("t");
+        quoted.summary = "Is \"responsible AI\" in the room?".into();
+        let xml = atom("https://papers.example", &[quoted], Utc::now());
+        assert!(
+            xml.contains("Is &quot;responsible AI&quot; in the room?"),
+            "{xml}"
+        );
+        assert!(!xml.contains("&amp;quot;"), "escaped twice: {xml}");
+    }
+
+    #[test]
     fn feed_carries_icon_and_rich_entries() {
         let mut rich = item("Dune: Part Two (2024)");
         rich.source = "seerr".into();
         rich.image = "https://image.tmdb.org/t/p/w500/poster.jpg".into();
-        let xml = atom(
-            "media",
-            "https://papers.example/media.xml",
-            &[rich],
-            Utc::now(),
-        );
+        let xml = atom("https://papers.example", &[rich], Utc::now());
         assert!(
             xml.contains("<icon>https://papers.example/icon.png</icon>"),
             "readers need a feed icon: {xml}"
         );
         assert!(xml.contains("<logo>https://papers.example/icon.png</logo>"));
-        assert!(xml.contains("xmlns:media=\"http://search.yahoo.com/mrss/\""));
-        assert!(
-            xml.contains("<media:thumbnail url=\"https://image.tmdb.org/t/p/w500/poster.jpg\"/>")
-        );
+        assert!(xml.contains("href=\"https://papers.example/feed.xml\" rel=\"self\""));
         assert!(xml.contains("rel=\"enclosure\""));
-        assert!(xml.contains("<img src=\"https://image.tmdb.org/t/p/w500/poster.jpg\""));
+        assert!(xml.contains("&lt;img src=&quot;https://image.tmdb.org/t/p/w500/poster.jpg&quot;"));
         assert!(xml.contains("<author><name>seerr</name></author>"));
         assert!(xml.contains("<category term=\"seerr\"/>"));
 
@@ -204,19 +204,27 @@ mod tests {
     }
 
     #[test]
-    fn entry_keeps_extra_anchors_verbatim() {
+    fn entry_keeps_extra_anchors_and_iframes_verbatim() {
         let mut with_extra = item("Dune: Part Two (2024)");
-        with_extra.extra =
-            "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
-                .into();
-        let xml = atom(
-            "media",
-            "https://papers.example/media.xml",
-            &[with_extra],
-            Utc::now(),
+        with_extra.extra = "<p><iframe src=\"https://www.youtube.com/embed/abc\"></iframe></p>\
+             <p><a href=\"https://x/watch?v=a&amp;b\">trailer</a></p>"
+            .into();
+        let xml = atom("https://papers.example", &[with_extra], Utc::now());
+        let feed = feed_rs::parser::parse(xml.as_bytes()).expect("atom must parse");
+        let content = feed.entries[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .body
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            content.contains("<iframe src=\"https://www.youtube.com/embed/abc\"></iframe>"),
+            "iframe survives the escape: {content}"
         );
-        assert!(xml.contains(
-            "<a href=\"https://x/watch?v=a&amp;b\">trailer</a> - <a href=\"https://p/add\">add</a>"
-        ));
+        assert!(
+            content.contains("<a href=\"https://x/watch?v=a&amp;b\">trailer</a>"),
+            "extra anchors keep their html entities: {content}"
+        );
     }
 }

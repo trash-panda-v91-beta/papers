@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use chrono::{Local, TimeDelta};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -23,6 +23,10 @@ use crate::store::{Item, NewItem, Store};
 
 const DEFAULT_LLM_URL: &str = "http://litellm.ai.svc.cluster.local:4000/v1";
 const DEFAULT_LLM_MODEL: &str = "deepseek-v4.1-flash";
+/// atoms readers scroll through before the old ones fall out
+const FEED_ENTRIES: usize = 100;
+/// seerr trending is curated, so picks sort above anything the model scores
+const SEERR_SCORE: i64 = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,7 +42,7 @@ async fn main() -> Result<()> {
         Some("sources") => {
             let config = Config::load(&Config::path())?;
             for source in &config.sources {
-                println!("{} (weight {})", source.name, source.weight);
+                println!("{}", source.name);
             }
             Ok(())
         }
@@ -68,22 +72,24 @@ async fn run(use_model: bool) -> Result<()> {
     let store = Store::open(&db_path())?;
     let config = effective_config(&store)?;
     let http = http_client()?;
+    let cutoff = cutoff(config.max_age_days);
 
     let mut added = 0usize;
     for source in &config.sources {
         match fetch::fetch(&http, source).await {
             Ok(items) => {
                 for item in items {
+                    if !fresh(item.published, cutoff) {
+                        continue;
+                    }
                     let new_item = NewItem {
                         source: source.name.clone(),
                         title: item.title,
                         link: item.link,
                         summary: item.summary,
                         published: item.published,
-                        weight: source.weight,
                         extra: item.extra,
                         image: item.image,
-                        feed: source.feed.clone().unwrap_or_else(|| "news".into()),
                     };
                     if store.insert(&new_item)? {
                         added += 1;
@@ -121,40 +127,50 @@ async fn run(use_model: bool) -> Result<()> {
                 }
             }
             Err(error) => {
-                warn!(%error, "model scoring failed, falling back to source weights");
-                score_by_weight(&news, &store, "rule score (model unavailable)")?;
+                warn!(%error, "model scoring failed, publishing unscored");
+                score_at_floor(
+                    &news,
+                    &store,
+                    config.rank.min_score,
+                    "rule score (model unavailable)",
+                )?;
             }
         }
     } else {
-        score_by_weight(&news, &store, "rule score")?;
+        score_at_floor(&news, &store, config.rank.min_score, "rule score")?;
     }
-    score_by_weight(&media, &store, "trending pick")?;
+    score_at_floor(&media, &store, SEERR_SCORE, "trending pick")?;
 
-    // each feed gets its own keep_per_day so media picks never lose their
-    // slots to better-scoring news; shown items become individual feed entries
-    let mut shown_ids: Vec<i64> = Vec::new();
-    let mut printed = 0usize;
-    for feed in store.pending_feeds()? {
-        let top = store.top(&feed, config.keep_per_day)?;
-        if top.is_empty() {
-            continue;
-        }
-        shown_ids.extend(top.iter().map(|item| item.id));
-        printed += 1;
-    }
-    if shown_ids.is_empty() {
-        info!("nothing cleared the bar today");
+    // each run publishes what cleared the bar, but never the whole backlog at once
+    let top = store.top(config.max_per_run, config.rank.min_score)?;
+    if top.is_empty() {
+        info!("nothing cleared the bar in this run");
         return Ok(());
     }
+    let shown_ids: Vec<i64> = top.iter().map(|item| item.id).collect();
     store.mark_shown(&shown_ids)?;
     write_feed(&store)?;
-    info!(feeds = printed, kept = shown_ids.len(), "paper printed");
+    info!(kept = shown_ids.len(), "paper printed");
     Ok(())
 }
 
-fn score_by_weight(items: &[Item], store: &Store, reason: &str) -> Result<()> {
+/// feeds hand over their whole archive; anything older than the window is noise
+fn cutoff(days: i64) -> DateTime<Utc> {
+    if days <= 0 {
+        DateTime::<Utc>::MIN_UTC
+    } else {
+        Utc::now() - TimeDelta::days(days)
+    }
+}
+
+/// undated items are seerr picks, which are current by definition
+fn fresh(published: Option<DateTime<Utc>>, cutoff: DateTime<Utc>) -> bool {
+    published.is_none_or(|published| published >= cutoff)
+}
+
+fn score_at_floor(items: &[Item], store: &Store, score: i64, reason: &str) -> Result<()> {
     for item in items {
-        store.set_score(item.id, item.weight, reason)?;
+        store.set_score(item.id, score, reason)?;
     }
     Ok(())
 }
@@ -187,20 +203,15 @@ fn effective_config(store: &Store) -> Result<Config> {
 }
 
 fn write_feed(store: &Store) -> Result<()> {
+    let entries = store.entries(FEED_ENTRIES)?;
+    let Some(updated) = entries.first().map(|item| item.shown_at) else {
+        return Ok(());
+    };
     let dir = out_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {dir}"))?;
-    let base = fetch::public_base();
-    for feed in store.feeds()? {
-        let url = format!("{base}/{feed}.xml");
-        let entries = store.feed_entries(&feed, 100)?;
-        if entries.is_empty() {
-            continue;
-        }
-        let updated = entries[0].shown_at;
-        let xml = render::atom(&feed, &url, &entries, updated);
-        std::fs::write(format!("{dir}/{feed}.xml"), xml)
-            .with_context(|| format!("writing {dir}/{feed}.xml"))?;
-    }
+    let xml = render::atom(&fetch::base_url(), &entries, updated);
+    std::fs::write(format!("{dir}/feed.xml"), xml)
+        .with_context(|| format!("writing {dir}/feed.xml"))?;
     Ok(())
 }
 
@@ -245,7 +256,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/icon.png", get(icon))
-        .route("/{feed}", get(serve_feed))
+        .route("/feed.xml", get(serve_feed))
         .route("/add", get(add_media))
         .route("/admin/config", get(admin_get_config).put(admin_put_config))
         .route("/admin/run", post(admin_run))
@@ -260,25 +271,14 @@ async fn icon() -> Response {
     ([(header::CONTENT_TYPE, "image/png")], ICON).into_response()
 }
 
-async fn serve_feed(Path(feed): Path<String>) -> Response {
-    // the feed name comes from the URL - only clean names reach the filesystem
-    let Some(name) = feed.strip_suffix(".xml") else {
-        return (StatusCode::NOT_FOUND, "no such feed").into_response();
-    };
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return (StatusCode::NOT_FOUND, "no such feed").into_response();
-    }
-    match tokio::fs::read_to_string(format!("{}/{}", out_dir(), feed)).await {
+async fn serve_feed() -> Response {
+    match tokio::fs::read_to_string(format!("{}/feed.xml", out_dir())).await {
         Ok(body) => (
             [(header::CONTENT_TYPE, "application/atom+xml; charset=utf-8")],
             body,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "no such feed").into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "no paper yet").into_response(),
     }
 }
 
@@ -331,22 +331,13 @@ async fn add_media(State(state): State<AppState>, Query(params): Query<AddParams
 }
 
 async fn sleep_until_next_run() {
-    let hour: u32 = env::var("PAPERS_HOUR")
+    // hourly by default: fetch, score and publish whatever cleared the bar
+    let minutes: u64 = env::var("PAPERS_INTERVAL_MINUTES")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(6);
-    let now = Local::now();
-    let mut next = now
-        .date_naive()
-        .and_hms_opt(hour, 0, 0)
-        .and_then(|naive| naive.and_local_timezone(Local).single())
-        .unwrap_or_else(|| now + TimeDelta::hours(1));
-    if next <= now {
-        next += TimeDelta::days(1);
-    }
-    let wait = (next - now).to_std().unwrap_or(Duration::from_secs(3600));
-    info!(seconds = wait.as_secs(), "sleeping until the next run");
-    tokio::time::sleep(wait).await;
+        .unwrap_or(60);
+    info!(minutes, "sleeping until the next run");
+    tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
 }
 
 fn admin_guard(headers: &HeaderMap) -> Response {
@@ -512,6 +503,20 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
+    #[test]
+    fn age_window_drops_a_source_backlog_but_keeps_undated_picks() {
+        // sources hand over their archive; only the recent tail may publish
+        let now = Utc::now();
+        let window = cutoff(3);
+        assert!(fresh(Some(now - TimeDelta::hours(2)), window));
+        assert!(!fresh(Some(now - TimeDelta::days(30)), window));
+        assert!(fresh(None, window), "undated seerr picks are current");
+        assert!(
+            fresh(Some(now - TimeDelta::days(400)), cutoff(0)),
+            "0 disables the window"
+        );
+    }
+
     #[tokio::test]
     async fn router_builds_and_serves_feeds() {
         let _env = ENV_LOCK.lock().unwrap();
@@ -524,7 +529,7 @@ mod tests {
             std::env::set_var("PAPERS_OUT", dir.to_str().unwrap());
         }
         std::fs::write(
-            dir.join("news.xml"),
+            dir.join("feed.xml"),
             "<feed/>\
         ",
         )
@@ -549,25 +554,27 @@ mod tests {
         assert_eq!(ok.text().await.unwrap(), "ok");
 
         let feed = client
-            .get(format!("http://{addr}/news.xml"))
+            .get(format!("http://{addr}/feed.xml"))
             .send()
             .await
             .unwrap();
         assert_eq!(feed.status(), 200);
         assert_eq!(feed.text().await.unwrap(), "<feed/>");
 
-        let missing = client
-            .get(format!("http://{addr}/nope.xml"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(missing.status(), 404);
-        let ugly = client
-            .get(format!("http://{addr}/../etc.xml"))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ugly.status(), 404);
+        for dead in [
+            "nope.xml",
+            "news.xml",
+            "media.xml",
+            "daily.xml",
+            "../etc.xml",
+        ] {
+            let missing = client
+                .get(format!("http://{addr}/{dead}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(missing.status(), 404, "{dead} must not serve a feed");
+        }
         let admin = client
             .get(format!("http://{addr}/admin/config"))
             .send()
@@ -626,7 +633,7 @@ mod e2e {
     /// boots stub feed + seerr + litellm servers, runs the real pipeline
     /// against a temp db, and asserts the observable feed files
     #[tokio::test]
-    async fn pipeline_publishes_per_feed_with_stub_servers() {
+    async fn pipeline_publishes_one_feed_with_stub_servers() {
         let _env = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("papers-e2e-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -688,7 +695,7 @@ mod e2e {
             axum::serve(seerr_listener, seerr_app).await.unwrap();
         });
 
-        // stub litellm: score every news item 9 - higher than any media weight
+        // stub litellm: score every news item 9, below the curated seerr pick
         let llm_app = Router::new().route(
             "/v1/chat/completions",
             post_route(|| async {
@@ -715,32 +722,53 @@ mod e2e {
         // live config pointing at the stubs
         let store = Store::open(&db_path()).unwrap();
         let config = format!(
-            "keep_per_day = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\nweight = 5\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nfeed = \"media\"\nweight = 7\n"
+            "max_per_run = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nlabel = \"New in Seerr\"\n"
         );
         store.save_config(&config).unwrap();
 
         run(true).await.unwrap();
 
-        // media feed exists even though every news item out-scored it, and
-        // the media item carries its trailer and add anchors
-        let news = std::fs::read_to_string(dir.join("out/news.xml")).unwrap();
-        assert!(news.contains("News A"), "news feed publishes scored items");
+        // one feed file carries both lanes, and the media item keeps its
+        // trailer iframe even though every news item out-scored it
+        let feed = std::fs::read_to_string(dir.join("out/feed.xml")).unwrap();
+        assert!(feed.contains("News A"), "news items are published");
         assert!(
-            news.contains("<em>stub</em>"),
-            "news items were scored by the stub LLM, not the weight fallback"
+            feed.contains("&lt;p&gt;&lt;em&gt;stub&lt;/em&gt;"),
+            "news items were scored by the stub LLM and escaped for readers"
         );
-        let media = std::fs::read_to_string(dir.join("out/media.xml")).unwrap();
         assert!(
-            media.contains("Stub Movie (2026)"),
-            "media feed keeps its slots: {media}"
+            feed.contains("New in Seerr: Stub Movie (2026)"),
+            "labels prefix the entry title: {feed}"
         );
-        assert!(media.contains("youtube.com/watch?v=stubtrailer"));
-        assert!(media.contains("/add?media=42&amp;media_type=movie"));
+        let parsed = feed_rs::parser::parse(feed.as_bytes()).expect("published feed parses");
+        let seerr_entry = parsed
+            .entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .title
+                    .as_ref()
+                    .is_some_and(|title| title.content.starts_with("New in Seerr:"))
+            })
+            .expect("the media pick is in the paper");
+        let body = seerr_entry
+            .content
+            .as_ref()
+            .and_then(|content| content.body.clone())
+            .unwrap_or_default();
+        assert!(
+            body.contains("youtube.com/embed/stubtrailer"),
+            "trailer plays inline: {body}"
+        );
+        assert!(
+            body.contains("/add?media=42&amp;media_type=movie"),
+            "add link keeps its entity: {body}"
+        );
 
-        // second run with nothing new: feeds stay, nothing republishes
+        // second run with nothing new: the paper stays put
         run(true).await.unwrap();
-        let media_again = std::fs::read_to_string(dir.join("out/media.xml")).unwrap();
-        assert_eq!(media, media_again);
+        let again = std::fs::read_to_string(dir.join("out/feed.xml")).unwrap();
+        assert_eq!(feed, again);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

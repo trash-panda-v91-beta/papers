@@ -157,7 +157,6 @@ mod tests {
             title: title.into(),
             link: "https://x/1".into(),
             summary: summary.into(),
-            weight: 5,
             reason: None,
             extra: String::new(),
             image: String::new(),
@@ -170,6 +169,7 @@ mod tests {
         let rank = Rank {
             exclude: vec!["giveaway".into()],
             require_any: vec!["kubernetes".into()],
+            min_score: 0,
             prompt: None,
         };
         let kept = prefilter(
@@ -189,6 +189,7 @@ mod tests {
         let rank = Rank {
             exclude: vec!["hype".into()],
             require_any: vec![],
+            min_score: 0,
             prompt: None,
         };
         let kept = prefilter(vec![item("AI hype", ""), item("Wireguard mesh", "")], &rank);
