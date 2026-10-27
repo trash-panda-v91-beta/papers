@@ -1,4 +1,6 @@
 max_per_run = 8
+# skip items older than this, so a source's archive never floods the feed (0 = no limit)
+max_age_days = 7
 
 [rank]
 exclude = ["giveaway", "sponsored", "webinar", "crypto"]

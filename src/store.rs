@@ -166,7 +166,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "select id, source, title, link, summary, weight, reason, extra, image
              from items where shown = 0 and score is null
-             order by weight desc, fetched_at desc limit ?1",
+             order by weight desc, published desc, fetched_at desc limit ?1",
         )?;
         let rows = stmt.query_map([limit as i64], |row| {
             Ok(Item {
@@ -198,7 +198,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "select id, source, title, link, summary, weight, reason, extra, image
              from items where shown = 0 and score >= 5
-             order by score desc, weight desc, fetched_at desc limit ?1",
+             order by score desc, weight desc, published desc, fetched_at desc limit ?1",
         )?;
         let rows = stmt.query_map([keep as i64], |row| {
             Ok(Item {

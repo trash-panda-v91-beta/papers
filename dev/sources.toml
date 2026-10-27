@@ -1,4 +1,5 @@
 max_per_run = 8
+max_age_days = 7
 
 [rank]
 exclude = ["giveaway", "sponsored", "webinar", "crypto"]

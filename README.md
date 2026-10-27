@@ -8,7 +8,9 @@ subscribe to.
 
 ## How it works
 
-1. `fetch` pulls every source in `sources.toml` and stores new items, deduped by link hash
+1. `fetch` pulls every source in `sources.toml` and stores new items, deduped by link hash.
+   Anything older than `max_age_days` is skipped, so a source's back catalogue never
+   floods the feed
 2. `rank` drops excluded items by keyword, then asks the model to score the rest 0 to 10
 3. everything scoring 5 or more is published, up to `max_per_run` per run
 4. `serve` publishes the feed over HTTP and runs the job hourly in process

@@ -14,6 +14,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -69,12 +70,16 @@ async fn run(use_model: bool) -> Result<()> {
     let store = Store::open(&db_path())?;
     let config = effective_config(&store)?;
     let http = http_client()?;
+    let cutoff = cutoff(config.max_age_days);
 
     let mut added = 0usize;
     for source in &config.sources {
         match fetch::fetch(&http, source).await {
             Ok(items) => {
                 for item in items {
+                    if !fresh(item.published, cutoff) {
+                        continue;
+                    }
                     let new_item = NewItem {
                         source: source.name.clone(),
                         title: item.title,
@@ -141,6 +146,20 @@ async fn run(use_model: bool) -> Result<()> {
     write_feed(&store)?;
     info!(kept = shown_ids.len(), "paper printed");
     Ok(())
+}
+
+/// feeds hand over their whole archive; anything older than the window is noise
+fn cutoff(days: i64) -> DateTime<Utc> {
+    if days <= 0 {
+        DateTime::<Utc>::MIN_UTC
+    } else {
+        Utc::now() - TimeDelta::days(days)
+    }
+}
+
+/// undated items are seerr picks, which are current by definition
+fn fresh(published: Option<DateTime<Utc>>, cutoff: DateTime<Utc>) -> bool {
+    published.is_none_or(|published| published >= cutoff)
 }
 
 fn score_by_weight(items: &[Item], store: &Store, reason: &str) -> Result<()> {
@@ -477,6 +496,20 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn age_window_drops_a_source_backlog_but_keeps_undated_picks() {
+        // sources hand over their archive; only the recent tail may publish
+        let now = Utc::now();
+        let window = cutoff(3);
+        assert!(fresh(Some(now - TimeDelta::hours(2)), window));
+        assert!(!fresh(Some(now - TimeDelta::days(30)), window));
+        assert!(fresh(None, window), "undated seerr picks are current");
+        assert!(
+            fresh(Some(now - TimeDelta::days(400)), cutoff(0)),
+            "0 disables the window"
+        );
+    }
 
     #[tokio::test]
     async fn router_builds_and_serves_feeds() {

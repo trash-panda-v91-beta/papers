@@ -8,6 +8,10 @@ pub struct Config {
     /// items published per run, so a backlog cannot dump the whole pool at once
     #[serde(default = "default_max_per_run")]
     pub max_per_run: usize,
+    /// sources hand over their whole back catalogue; only recent items count.
+    /// 0 disables the cutoff.
+    #[serde(default = "default_max_age_days")]
+    pub max_age_days: i64,
     #[serde(default)]
     pub rank: Rank,
     pub sources: Vec<Source>,
@@ -59,6 +63,10 @@ pub enum SourceKind {
 
 fn default_max_per_run() -> usize {
     8
+}
+
+fn default_max_age_days() -> i64 {
+    7
 }
 
 fn default_weight() -> i64 {
@@ -124,6 +132,7 @@ url = "http://seerr:80"
 
         let config = Config::load(&path).unwrap();
         assert_eq!(config.max_per_run, 8);
+        assert_eq!(config.max_age_days, default_max_age_days());
         assert_eq!(config.sources.len(), 3);
         assert_eq!(config.sources[0].weight, 8);
         assert_eq!(config.sources[1].weight, default_weight());
