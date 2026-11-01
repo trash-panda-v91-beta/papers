@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.0](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.5...v0.4.0) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** Update rusqlite ( 0.40.2 ➔ 0.41.0 ) ([#46](https://github.com/trash-panda-v91-beta/papers/issues/46))
+
+### Features
+
+* **deps:** update hk ( 2.8.2 ➔ 2.9.0 ) ([#51](https://github.com/trash-panda-v91-beta/papers/issues/51)) ([6b8b23e](https://github.com/trash-panda-v91-beta/papers/commit/6b8b23e4741b83195db108c7a164afaa587262f8))
+* **deps:** update mise tools ([#55](https://github.com/trash-panda-v91-beta/papers/issues/55)) ([17a21dd](https://github.com/trash-panda-v91-beta/papers/commit/17a21dd67a92e39822e5ce9e6fd4c458028b77c9))
+* **deps:** Update rusqlite ( 0.40.2 ➔ 0.41.0 ) ([#46](https://github.com/trash-panda-v91-beta/papers/issues/46)) ([94ef2c6](https://github.com/trash-panda-v91-beta/papers/commit/94ef2c6b21df178c4677c73aef11103cb79ebba9))
+* **feed:** publish one rich feed at /feed.xml ([#44](https://github.com/trash-panda-v91-beta/papers/issues/44)) ([00468e9](https://github.com/trash-panda-v91-beta/papers/commit/00468e9deeba633b87a181d566bced21b4edef12))
+
+
+### Bug Fixes
+
+* **deps:** update hk ( 2.8.1 ➔ 2.8.2 ) ([#50](https://github.com/trash-panda-v91-beta/papers/issues/50)) ([0308f52](https://github.com/trash-panda-v91-beta/papers/commit/0308f52cd5d1c369e293db447cca059f4e382f19))
+* **deps:** update mise tools ([#43](https://github.com/trash-panda-v91-beta/papers/issues/43)) ([c4092c1](https://github.com/trash-panda-v91-beta/papers/commit/c4092c186b0bc433a5d1826ed3560e777dc5f886))
+* **deps:** update tokio ( 1.54.0 ➔ 1.54.1 ) ([#39](https://github.com/trash-panda-v91-beta/papers/issues/39)) ([38b85e9](https://github.com/trash-panda-v91-beta/papers/commit/38b85e965a96e36935a1fea0792040bfc7024299))
+
 ## [0.3.5](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.4...v0.3.5) (2026-10-24)
 
 
