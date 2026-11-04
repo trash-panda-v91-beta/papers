@@ -26,7 +26,7 @@ const DEFAULT_LLM_MODEL: &str = "deepseek-v4.1-flash";
 /// atoms readers scroll through before the old ones fall out
 const FEED_ENTRIES: usize = 100;
 /// seerr trending is curated, so picks sort above anything the model scores
-const SEERR_SCORE: i64 = 10;
+const MEDIA_SCORE: i64 = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -103,16 +103,21 @@ async fn run(use_model: bool) -> Result<()> {
     let candidates = rank::prefilter(store.unseen(200)?, &config.rank);
     info!(fetched = added, candidates = candidates.len(), "collected");
 
-    // seerr picks are not news; the reading scorer would fail them every time
-    let seerr_names: Vec<&str> = config
+    // media picks are not news; the reading scorer would fail them every time
+    let media_names: Vec<&str> = config
         .sources
         .iter()
-        .filter(|source| matches!(source.kind, config::SourceKind::Seerr { .. }))
+        .filter(|source| {
+            matches!(
+                source.kind,
+                config::SourceKind::Seerr { .. } | config::SourceKind::Jellyfin { .. }
+            )
+        })
         .map(|source| source.name.as_str())
         .collect();
     let (media, news): (Vec<Item>, Vec<Item>) = candidates
         .into_iter()
-        .partition(|item| seerr_names.contains(&item.source.as_str()));
+        .partition(|item| media_names.contains(&item.source.as_str()));
 
     if use_model {
         let prompt = config
@@ -139,7 +144,7 @@ async fn run(use_model: bool) -> Result<()> {
     } else {
         score_at_floor(&news, &store, config.rank.min_score, "rule score")?;
     }
-    score_at_floor(&media, &store, SEERR_SCORE, "trending pick")?;
+    score_at_floor(&media, &store, MEDIA_SCORE, "media pick")?;
 
     // each run publishes what cleared the bar, but never the whole backlog at once
     let top = store.top(config.max_per_run, config.rank.min_score)?;

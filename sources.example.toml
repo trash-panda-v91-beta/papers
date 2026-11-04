@@ -44,3 +44,15 @@ kind = "seerr"
 url = "http://seerr.media.svc.cluster.local"
 label = "New in Seerr"
 max_per_fetch = 10
+
+# What recently landed in Jellyfin, newest first. Needs JELLYFIN_API_KEY.
+# Each item gets its poster, rating, official rating, runtime, genres and an
+# inline trailer when one is stored. A series names its newest episode on disk.
+# libraries scopes the query; omit it to read the whole catalogue.
+[[sources]]
+name = "jellyfin-new"
+kind = "jellyfin"
+url = "http://jellyfin.media.svc.cluster.local:8096"
+label = "New in Jellyfin"
+libraries = ["Movies", "Shows"]
+max_per_fetch = 10
