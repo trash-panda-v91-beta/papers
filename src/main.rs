@@ -147,7 +147,14 @@ async fn run(use_model: bool) -> Result<()> {
     score_at_floor(&media, &store, MEDIA_SCORE, "media pick")?;
 
     // each run publishes what cleared the bar, but never the whole backlog at once
-    let top = store.top(config.max_per_run, config.rank.min_score)?;
+    // every new addition publishes the run it arrives; `max_per_run` only
+    // paces the news, which is the part with a backlog
+    let pool = store.top(usize::MAX, config.rank.min_score)?;
+    let (media_top, news_top): (Vec<Item>, Vec<Item>) = pool
+        .into_iter()
+        .partition(|item| media_names.contains(&item.source.as_str()));
+    let mut top = media_top;
+    top.extend(news_top.into_iter().take(config.max_per_run));
     if top.is_empty() {
         info!("nothing cleared the bar in this run");
         return Ok(());
@@ -762,16 +769,16 @@ mod e2e {
         // live config pointing at the stubs
         let store = Store::open(&db_path()).unwrap();
         let config = format!(
-            "max_per_run = 10\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nlabel = \"New in Seerr\"\n"
+            "max_per_run = 1\n[[sources]]\nname = \"stub-news\"\nkind = \"feed\"\nurl = \"http://{feed_addr}/rss\"\n\n[[sources]]\nname = \"stub-seerr\"\nkind = \"seerr\"\nurl = \"http://{seerr_addr}\"\nlabel = \"New in Seerr\"\n"
         );
         store.save_config(&config).unwrap();
 
         run(true).await.unwrap();
 
-        // one feed file carries both lanes, and the media item keeps its
-        // trailer iframe even though every news item out-scored it
+        // one feed file carries both lanes: max_per_run paces the news, while
+        // every media pick publishes the run it arrives
         let feed = std::fs::read_to_string(dir.join("out/feed.xml")).unwrap();
-        assert!(feed.contains("News A"), "news items are published");
+        assert!(feed.contains("News "), "news items are published");
         assert!(
             feed.contains("&lt;em&gt;stub&lt;/em&gt;"),
             "news items were scored by the stub LLM and escaped for readers"
@@ -781,6 +788,20 @@ mod e2e {
             "labels prefix the entry title: {feed}"
         );
         let parsed = feed_rs::parser::parse(feed.as_bytes()).expect("published feed parses");
+        let published_news = parsed
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .title
+                    .as_ref()
+                    .is_some_and(|title| title.content.starts_with("News "))
+            })
+            .count();
+        assert_eq!(
+            published_news, 1,
+            "max_per_run paces the news, the rest waits for the next run"
+        );
         let seerr_entry = parsed
             .entries
             .iter()
@@ -805,10 +826,22 @@ mod e2e {
             "add link keeps its entity: {body}"
         );
 
-        // second run with nothing new: the paper stays put
+        // second run: the news backlog drains one per run, the media pick is
+        // not repeated
         run(true).await.unwrap();
         let again = std::fs::read_to_string(dir.join("out/feed.xml")).unwrap();
-        assert_eq!(feed, again);
+        let again = feed_rs::parser::parse(again.as_bytes()).expect("feed still parses");
+        let media_entries = again
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .title
+                    .as_ref()
+                    .is_some_and(|title| title.content.starts_with("New in Seerr:"))
+            })
+            .count();
+        assert_eq!(media_entries, 1, "a published pick is not repeated");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
