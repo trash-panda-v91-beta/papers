@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.4.0...v0.4.1) (2026-11-04)
+
+
+### Features
+
+* **deps:** update hk ( 2.10.0 ➔ 2.11.0 ) ([#58](https://github.com/trash-panda-v91-beta/papers/issues/58)) ([58e59d6](https://github.com/trash-panda-v91-beta/papers/commit/58e59d6bf3a4af72ca4bc17a62de5542b50e3b09))
+* **feed:** publish media picks without pacing ([#59](https://github.com/trash-panda-v91-beta/papers/issues/59)) ([60f4184](https://github.com/trash-panda-v91-beta/papers/commit/60f418468015e6781c69793e95bc6d8482dd3326))
+
 ## [0.4.0](https://github.com/trash-panda-v91-beta/papers/compare/v0.3.5...v0.4.0) (2026-11-04)
 
 
