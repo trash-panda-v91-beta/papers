@@ -15,7 +15,7 @@ mise run test     # cargo test, unit tests live inside each module
 
 ## Layout
 
-- `src/config.rs` - `sources.toml` parsing, source kinds `feed`, `html` and `seerr`.
+- `src/config.rs` - `sources.toml` parsing, source kinds `feed`, `html`, `seerr` and `jellyfin`.
   Stored live in SQLite and editable at runtime via the token-guarded admin API
   (`GET/PUT /admin/config`, `POST /admin/run`, `GET /admin/preview`); the
   mounted file only seeds an empty store. Needs `PAPERS_ADMIN_TOKEN`.

@@ -61,6 +61,12 @@ pub enum SourceKind {
     Seerr {
         url: String,
     },
+    Jellyfin {
+        url: String,
+        /// libraries to read, empty means the whole catalogue
+        #[serde(default)]
+        libraries: Vec<String>,
+    },
 }
 
 fn default_max_per_run() -> usize {
@@ -121,6 +127,12 @@ link = "a"
 name = "seerr"
 kind = "seerr"
 url = "http://seerr:80"
+
+[[sources]]
+name = "jellyfin"
+kind = "jellyfin"
+url = "http://jellyfin:8096"
+libraries = ["Movies", "Shows"]
 "#;
         let dir = std::env::temp_dir().join("ng-feeds-config-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -130,7 +142,7 @@ url = "http://seerr:80"
         let config = Config::load(&path).unwrap();
         assert_eq!(config.max_per_run, 8);
         assert_eq!(config.max_age_days, default_max_age_days());
-        assert_eq!(config.sources.len(), 3);
+        assert_eq!(config.sources.len(), 4);
         assert_eq!(config.rank.exclude, vec!["giveaway".to_string()]);
         assert_eq!(
             config.rank.min_score, 0,
@@ -139,6 +151,11 @@ url = "http://seerr:80"
         assert!(matches!(
             config.sources[2].kind,
             SourceKind::Seerr { ref url } if url == "http://seerr:80"
+        ));
+        assert!(matches!(
+            config.sources[3].kind,
+            SourceKind::Jellyfin { ref url, ref libraries }
+                if url == "http://jellyfin:8096" && libraries.len() == 2
         ));
     }
 

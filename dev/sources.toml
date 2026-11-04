@@ -19,3 +19,11 @@ max_per_fetch = 20
 name = "selfh-st"
 kind = "feed"
 url = "https://selfh.st/rss/"
+
+[[sources]]
+name = "jellyfin-new"
+kind = "jellyfin"
+url = "https://jf.nebular-grid.space"
+label = "New in Jellyfin"
+libraries = ["Movies", "Shows", "Tube"]
+max_per_fetch = 10
