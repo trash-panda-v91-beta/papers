@@ -13,7 +13,8 @@ reader can subscribe to.
    Anything older than `max_age_days` is skipped, so a source's back catalogue never
    floods the feed
 2. `rank` drops excluded items by keyword, then asks the model to score the rest 0 to 10
-3. everything is published, up to `max_per_run` per run, best score first
+3. published best score first. `max_per_run` paces the news, so a backlog never floods the
+   feed; media picks always publish in the run they arrive
 4. `serve` publishes the feed over HTTP and runs the job hourly in process
 
 Each article is its own entry with its image, summary, source extras (poster, rating, inline

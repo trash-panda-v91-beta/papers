@@ -231,7 +231,7 @@ impl Store {
             "select id, source, title, link, summary, reason, extra, image,
                     coalesce(shown_at, fetched_at) as stamp
              from items where shown = 1
-             order by stamp desc limit ?1",
+             order by stamp desc, score desc limit ?1",
         )?;
         let rows = stmt.query_map([keep as i64], |row| {
             Ok((
@@ -317,10 +317,14 @@ mod tests {
             store.top(10, 5).unwrap().len() == 1,
             "only the scored item is a candidate"
         );
-        store.mark_shown(&[unseen[0].id]).unwrap();
+        store.set_score(unseen[1].id, 3, "low").unwrap();
+        // one call, so both entries carry the same stamp: the score decides
+        // which one a reader sees first
+        store.mark_shown(&[unseen[1].id, unseen[0].id]).unwrap();
 
         let entries = store.entries(30).unwrap();
-        assert_eq!(entries.len(), 1, "only published items are feed entries");
+        assert_eq!(entries.len(), 2, "only published items are feed entries");
+        assert_eq!(entries[0].reason.as_deref(), Some("good"), "best first");
     }
 
     #[test]
