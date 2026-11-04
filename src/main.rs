@@ -256,6 +256,9 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/icon.png", get(icon))
+        .route("/favicon.ico", get(icon))
+        .route("/apple-touch-icon.png", get(icon))
+        .route("/", get(index))
         .route("/feed.xml", get(serve_feed))
         .route("/add", get(add_media))
         .route("/admin/config", get(admin_get_config).put(admin_put_config))
@@ -269,6 +272,18 @@ const ICON: &[u8] = include_bytes!("../assets/icon.png");
 
 async fn icon() -> Response {
     ([(header::CONTENT_TYPE, "image/png")], ICON).into_response()
+}
+
+/// readers and browsers look for icons on the site root before the feed's own
+const INDEX: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
+<title>papers</title>\
+<link rel=\"icon\" type=\"image/png\" href=\"/icon.png\">\
+<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\">\
+<link rel=\"alternate\" type=\"application/atom+xml\" title=\"papers\" href=\"/feed.xml\">\
+</head><body><h1>papers</h1><p><a href=\"/feed.xml\">feed.xml</a></p></body></html>";
+
+async fn index() -> Response {
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], INDEX).into_response()
 }
 
 async fn serve_feed() -> Response {
@@ -595,6 +610,26 @@ mod tests {
         );
         assert_eq!(icon.bytes().await.unwrap().as_ref(), ICON);
 
+        // readers look for the avatar on the site root and at the apple/
+        // ico paths before the feed's own <icon>; all of them must answer
+        for path in ["/favicon.ico", "/apple-touch-icon.png"] {
+            let avatar = client
+                .get(format!("http://{addr}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(avatar.status(), 200, "{path} must serve the icon");
+            assert_eq!(avatar.bytes().await.unwrap().as_ref(), ICON);
+        }
+        let root = client.get(format!("http://{addr}/")).send().await.unwrap();
+        assert_eq!(root.status(), 200);
+        let html = root.text().await.unwrap();
+        assert!(
+            html.contains("rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\""),
+            "the root page has to declare the touch icon: {html}"
+        );
+        assert!(html.contains("rel=\"alternate\" type=\"application/atom+xml\""));
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -733,7 +768,7 @@ mod e2e {
         let feed = std::fs::read_to_string(dir.join("out/feed.xml")).unwrap();
         assert!(feed.contains("News A"), "news items are published");
         assert!(
-            feed.contains("&lt;p&gt;&lt;em&gt;stub&lt;/em&gt;"),
+            feed.contains("&lt;em&gt;stub&lt;/em&gt;"),
             "news items were scored by the stub LLM and escaped for readers"
         );
         assert!(

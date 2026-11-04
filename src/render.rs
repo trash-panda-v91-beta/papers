@@ -78,11 +78,29 @@ fn entry_body(item: &Item, reason: &str) -> String {
         body.push_str(&item.extra);
         body.push('\n');
     }
+    // the site the article came from, so a mixed feed still reads per source
+    let icon = favicon(&item.link)
+        .map(|icon| {
+            format!(
+                "<img src=\"{icon}\" alt=\"{}\" width=\"16\" height=\"16\"/> ",
+                item.source
+            )
+        })
+        .unwrap_or_default();
     body.push_str(&format!(
-        "<p><em>{reason}</em> <small>{}</small></p>",
+        "<p>{icon}<em>{reason}</em> <small>{}</small></p>",
         item.source
     ));
     body
+}
+
+/// per source icon, derived from the article's domain so new sources just work
+fn favicon(link: &str) -> Option<String> {
+    let url = reqwest::Url::parse(link).ok()?;
+    Some(format!(
+        "https://icons.duckduckgo.com/ip3/{}.ico",
+        url.host_str()?
+    ))
 }
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -152,7 +170,7 @@ mod tests {
         // reeder renders nothing for raw tags inside content type="html"
         let xml = atom("https://papers.example", &[item("t")], Utc::now());
         assert!(
-            xml.contains("&lt;p&gt;&lt;em&gt;kernel change&lt;/em&gt;"),
+            xml.contains("&lt;em&gt;kernel change&lt;/em&gt;"),
             "body markup must be entity-escaped: {xml}"
         );
         assert!(
@@ -173,6 +191,18 @@ mod tests {
             "{xml}"
         );
         assert!(!xml.contains("&amp;quot;"), "escaped twice: {xml}");
+    }
+
+    #[test]
+    fn entry_body_carries_the_source_favicon() {
+        let mut sourced = item("LWN weekly");
+        sourced.link = "https://lwn.net/Articles/1234/".into();
+        let xml = atom("https://papers.example", &[sourced], Utc::now());
+        assert!(
+            xml.contains("https://icons.duckduckgo.com/ip3/lwn.net.ico"),
+            "favicon derived from the article domain: {xml}"
+        );
+        assert!(xml.contains("&lt;img src=&quot;https://icons.duckduckgo.com"));
     }
 
     #[test]
