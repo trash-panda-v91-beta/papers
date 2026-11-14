@@ -2,7 +2,7 @@
 actionlint = "1.7.12"
 hk = "2.12.0"
 pkl = "0.32.2"
-rumdl = "0.3.2"
+rumdl = "0.3.3"
 shellcheck = "0.11.0"
 tombi = "1.11.2"
 yamlfmt = "0.21.0"
