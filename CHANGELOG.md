@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.2](https://github.com/trash-panda-v91-beta/papers/compare/v0.4.1...v0.4.2) (2026-11-14)
+
+
+### Features
+
+* **deps:** update hk ( 2.11.1 ➔ 2.12.0 ) ([#70](https://github.com/trash-panda-v91-beta/papers/issues/70)) ([9b4bd4a](https://github.com/trash-panda-v91-beta/papers/commit/9b4bd4a8dd374060d4245a3f1bfbb49f208cdfee))
+* **deps:** update toml ( 1.1.8+spec-1.1.0 ➔ 1.2.0 ) ([#64](https://github.com/trash-panda-v91-beta/papers/issues/64)) ([800af98](https://github.com/trash-panda-v91-beta/papers/commit/800af9893bd05df9383327a5df0a74b5d18b5704))
+
+
+### Bug Fixes
+
+* **deps:** update hk ( 2.11.0 ➔ 2.11.1 ) ([#62](https://github.com/trash-panda-v91-beta/papers/issues/62)) ([23e0cb5](https://github.com/trash-panda-v91-beta/papers/commit/23e0cb56ec5286e28b3bca50707f05f1b64e7b71))
+* **deps:** update toml ( 1.2.0+spec-1.1.0 ➔ 1.2.1 ) ([#67](https://github.com/trash-panda-v91-beta/papers/issues/67)) ([137cfb2](https://github.com/trash-panda-v91-beta/papers/commit/137cfb29c3786041d5d9fe82dbb63eb1864ba6f5))
+
 ## [0.4.1](https://github.com/trash-panda-v91-beta/papers/compare/v0.4.0...v0.4.1) (2026-11-04)
 
 
